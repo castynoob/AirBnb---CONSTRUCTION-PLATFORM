@@ -1,18 +1,33 @@
 {
   "name": "airbnb-construction",
   "version": "1.0.0",
-  "description": "",
   "main": "index.js",
   "scripts": {
     "test": "echo \"Error: no test specified\" && exit 1",
-    "start": "nodemon app.js"
+    "start": "nodemon server.js"
   },
   "author": "",
   "license": "ISC",
   "dependencies": {
+    "bcryptjs": "^3.0.2",
     "cors": "^2.8.5",
+    "dotenv": "^17.2.3",
     "express": "^5.1.0",
+    "jsonwebtoken": "^9.0.2",
     "morgan": "^1.10.1",
+    "mysql2": "^3.15.2"
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/zxilverHub/AirBnb---CONSTRUCTION-PLATFORM.git"
+  },
+  "keywords": [],
+  "bugs": {
+    "url": "https://github.com/zxilverHub/AirBnb---CONSTRUCTION-PLATFORM/issues"
+  },
+  "homepage": "https://github.com/zxilverHub/AirBnb---CONSTRUCTION-PLATFORM#readme",
+  "description": "",
+  "devDependencies": {
     "nodemon": "^3.1.10"
   }
 }
