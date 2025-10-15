@@ -1,16 +1,17 @@
 import pool from "../config/db.js";
 
-export const createUser = async (userData) => {
-  const { email, password, first_name, last_name, role } = userData;
-  const [result] = await pool.query(
-    `INSERT INTO users (id, email, password, first_name, last_name, role, created_at, updated_at)
-     VALUES (UUID(), ?, ?, ?, ?, ?, NOW(), NOW())`,
-    [email, password, first_name, last_name, role]
+export const findUserByEmail = async (email) => {
+  const result = await pool.query(
+    "SELECT id, email, password, role, first_name, last_name FROM users WHERE email = $1",
+    [email]
   );
-  return result;
+  return result.rows[0];
 };
 
-export const findUserByEmail = async (email) => {
-  const [rows] = await pool.query("SELECT * FROM users WHERE email = ?", [email]);
-  return rows[0];
+export const createUser = async ({ email, password, first_name, last_name, role }) => {
+  await pool.query(
+    `INSERT INTO users (email, password, first_name, last_name, role)
+     VALUES ($1, $2, $3, $4, $5)`,
+    [email, password, first_name, last_name, role]
+  );
 };
