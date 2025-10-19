@@ -1,10 +1,9 @@
-// ✅ src/middleware/authMiddleware.js
 import jwt from "jsonwebtoken";
 import dotenv from "dotenv";
 
 dotenv.config();
 
-export const verifyToken = (req, res, next) => {
+export const authenticateToken = (req, res, next) => {
   const authHeader = req.headers.authorization;
   if (!authHeader) return res.status(401).json({ message: "No token provided" });
 
@@ -16,3 +15,5 @@ export const verifyToken = (req, res, next) => {
   });
 };
 
+// Also export as verifyToken for backward compatibility
+export const verifyToken = authenticateToken;

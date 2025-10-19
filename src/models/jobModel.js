@@ -58,15 +58,16 @@ export const getJobById = async (id) => {
 };
 
 // 🟣 Update job
+// ✅ SECURE VERSION:
 export const updateJob = async (id, fields) => {
   const keys = Object.keys(fields);
   if (keys.length === 0) return null;
 
-  const setQuery = keys.map((key, idx) => `${key} = $${idx + 1}`).join(", ");
-  const values = Object.values(fields);
+  const setQuery = keys.map((key, idx) => `${key} = $${idx + 2}`).join(", ");
+  const values = [id, ...Object.values(fields)];
 
   const result = await pool.query(
-    `UPDATE jobs SET ${setQuery}, updated_at = NOW() WHERE id = '${id}' RETURNING *`,
+    `UPDATE jobs SET ${setQuery}, updated_at = NOW() WHERE id = $1 RETURNING *`,
     values
   );
   return result.rows[0];
