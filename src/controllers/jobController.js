@@ -1,10 +1,22 @@
 // ✅ src/controllers/jobController.js (ESM version)
 import * as Job from "../models/jobModel.js";
-
+import pool from "../config/db.js";
 // 🟢 Create new job (manager only)
 export const createJob = async (req, res) => {
   try {
-    const manager_id = req.user.id; // from JWT
+    // Get manager profile ID from user ID
+    const managerProfile = await pool.query(
+      `SELECT id FROM manager_profiles WHERE user_id = $1`,
+      [req.user.id]
+    );
+
+    if (!managerProfile.rows[0]) {
+      return res.status(403).json({ 
+        message: "Property manager profile not found. Please complete your profile first." 
+      });
+    }
+
+    const manager_id = managerProfile.rows[0].id;
     const jobData = { ...req.body, manager_id };
 
     const newJob = await Job.createJob(jobData);
