@@ -7,12 +7,14 @@ import {
   getMyProperties,
   getPropertyById,
   updateProperty,
-  deleteProperty
+  deleteProperty,
+  getAllProperties
 } from "../controllers/propertyController.js";
 
 const router = express.Router();
 
 // All property endpoints require property_manager role
+router.get("/all", verifyToken, getAllProperties);
 router.post("/", verifyToken, authorizeRoles("property_manager"), createProperty);
 router.get("/", verifyToken, authorizeRoles("property_manager"), getMyProperties);
 router.get("/:id", verifyToken, authorizeRoles("property_manager"), getPropertyById);

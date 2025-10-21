@@ -72,3 +72,30 @@ export const deleteJob = async (req, res) => {
     res.status(500).json({ message: "Server error" });
   }
 };
+
+// 🟠 Get all jobs by manager ID (accessible by any role)
+export const getJobsByManagerId = async (req, res) => {
+  try {
+    const { manager_id } = req.params;
+    
+    // Verify manager exists
+    const managerExists = await pool.query(
+      `SELECT id FROM manager_profiles WHERE id = $1`,
+      [manager_id]
+    );
+
+    if (!managerExists.rows[0]) {
+      return res.status(404).json({ message: "Manager profile not found" });
+    }
+
+    const jobs = await Job.getJobsByManagerId(manager_id);
+    res.json({
+      message: "Jobs retrieved successfully",
+      count: jobs.length,
+      jobs
+    });
+  } catch (err) {
+    console.error("❌ Error fetching jobs by manager ID:", err);
+    res.status(500).json({ message: "Server error" });
+  }
+};
