@@ -78,3 +78,12 @@ export const deleteJob = async (id) => {
   await pool.query(`DELETE FROM jobs WHERE id = $1`, [id]);
   return { message: "Job deleted successfully" };
 };
+
+// 🟠 Get all jobs by manager ID
+export const getJobsByManagerId = async (manager_id) => {
+  const result = await pool.query(
+    `SELECT * FROM jobs WHERE manager_id = $1 ORDER BY created_at DESC`,
+    [manager_id]
+  );
+  return result.rows;
+};

@@ -12,6 +12,7 @@ export const createProperty = async (req, res) => {
       postal_code,
       num_units,
       building_type,
+      building_name,
       latitude,
       longitude
     } = req.body;
@@ -46,6 +47,7 @@ export const createProperty = async (req, res) => {
         postal_code: postal_code || null,
         num_units: num_units || 0,
         building_type: building_type || "Apartment",
+        building_name: building_name,
         latitude: latitude || null,
         longitude: longitude || null
     });
@@ -234,6 +236,20 @@ export const deleteProperty = async (req, res) => {
 
   } catch (err) {
     console.error("❌ Error deleting property:", err);
+    res.status(500).json({ message: "Server error" });
+  }
+};
+
+// 🟢 Get all properties (accessible by any authenticated user)
+export const getAllProperties = async (req, res) => {
+  try {
+    const properties = await Property.getAllProperties();
+    res.json({
+      total: properties.length,
+      properties
+    });
+  } catch (err) {
+    console.error("❌ Error fetching all properties:", err);
     res.status(500).json({ message: "Server error" });
   }
 };
