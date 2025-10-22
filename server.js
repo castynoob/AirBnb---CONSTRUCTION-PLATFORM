@@ -9,6 +9,7 @@ import propertyRoutes from "./src/routes/propertyRoutes.js";
 import paymentRoutes from "./src/routes/paymentRoutes.js";
 import messageRoutes from "./src/routes/messageRoutes.js";  // ✅ NEW
 import setupSocket from "./src/config/socketSetup.js";      // ✅ NEW
+import userRoutes from "./src/routes/userRoutes.js"
 
 dotenv.config();
 const app = express();
@@ -46,6 +47,7 @@ app.use(express.json());
 // ROUTES
 // ============================================
 app.use("/api/auth", authRoutes);
+app.use("/api/users", userRoutes);
 app.use("/api/jobs", jobRoutes);
 app.use("/api/bids", bidRoutes);
 app.use("/api/properties", propertyRoutes);

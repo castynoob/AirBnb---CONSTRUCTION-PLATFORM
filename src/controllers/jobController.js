@@ -80,7 +80,7 @@ export const getJobsByManagerId = async (req, res) => {
     
     // Verify manager exists
     const managerExists = await pool.query(
-      `SELECT id FROM manager_profiles WHERE id = $1`,
+      `SELECT id FROM manager_profiles WHERE user_id = $1`,
       [manager_id]
     );
 
@@ -88,7 +88,7 @@ export const getJobsByManagerId = async (req, res) => {
       return res.status(404).json({ message: "Manager profile not found" });
     }
 
-    const jobs = await Job.getJobsByManagerId(manager_id);
+    const jobs = await Job.getJobsByManagerId(managerExists.rows[0]["id"]);
     res.json({
       message: "Jobs retrieved successfully",
       count: jobs.length,
