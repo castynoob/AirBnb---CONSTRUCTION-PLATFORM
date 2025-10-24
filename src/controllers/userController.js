@@ -91,3 +91,54 @@ export const getEntrepreneurProfileById = async (req, res) => {
     res.status(500).json({ message: "Server error" });
   }
 };
+
+// ✅ Get Manager Profile by User ID
+export const getManagerProfileByUserId = async (req, res) => {
+  try {
+    const userId = req.params.userId;
+
+    // Check if user exists
+    const userCheck = await pool.query(
+      "SELECT id, role FROM users WHERE id = $1",
+      [userId]
+    );
+
+    if (userCheck.rows.length === 0) {
+      return res.status(404).json({ message: "User not found" });
+    }
+
+    const userRole = userCheck.rows[0].role;
+    if (userRole !== "property_manager") {
+      return res.status(403).json({
+        message: "Access denied: The provided user is not a manager",
+      });
+    }
+
+    // Fetch the manager profile (assuming you have `manager_profiles` table)
+    const manager = await pool.query(
+      `SELECT mp.*, 
+              u.email, 
+              u.first_name, 
+              u.last_name, 
+              u.role 
+       FROM manager_profiles mp
+       JOIN users u ON mp.user_id = u.id
+       WHERE mp.user_id = $1`,
+      [userId]
+    );
+
+    if (manager.rows.length === 0) {
+      return res
+        .status(404)
+        .json({ message: "Manager profile not found" });
+    }
+
+    res.status(200).json({
+      message: "Manager profile fetched successfully",
+      profile: manager.rows[0],
+    });
+  } catch (error) {
+    console.error("Error fetching manager profile by user ID:", error);
+    res.status(500).json({ message: "Server error" });
+  }
+};

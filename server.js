@@ -10,9 +10,12 @@ import paymentRoutes from "./src/routes/paymentRoutes.js";
 import messageRoutes from "./src/routes/messageRoutes.js";  // ✅ NEW
 import setupSocket from "./src/config/socketSetup.js";      // ✅ NEW
 import userRoutes from "./src/routes/userRoutes.js"
+import morgan from "morgan";
 
 dotenv.config();
 const app = express();
+
+app.use(morgan('dev'))
 
 // ============================================
 // CREATE HTTP SERVER (for Socket.io)

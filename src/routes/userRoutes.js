@@ -5,6 +5,7 @@ import {
   getProfile,
   getEntrepreneurProfile,
   getEntrepreneurProfileById,
+  getManagerProfileByUserId, // ✅ add this
 } from "../controllers/userController.js";
 
 import { authorizeRoles } from "../middleware/roleMiddleware.js";
@@ -29,5 +30,13 @@ router.get(
   authorizeRoles("entrepreneur", "property_manager"),
   getEntrepreneurProfileById
 );
+
+router.get(
+  "/manager/:userId",
+  authenticateToken,
+  authorizeRoles("entrepreneur", "property_manager"),
+  getManagerProfileByUserId
+);
+
 
 export default router;
