@@ -9,7 +9,8 @@ import {
   requestPasswordReset,
   resetPassword,
   getCurrentUser,
-  updateCurrentUser 
+  updateCurrentUser,
+  googleLogin
 } from "../controllers/authController.js";
 import { validateRegistration, validateLogin } from "../middleware/validationMiddleware.js";
 import { authenticateToken } from "../middleware/authMiddleware.js";  // ← ADD THIS LINE!
@@ -18,6 +19,7 @@ const router = express.Router();
 
 router.post("/register", validateRegistration, register);
 router.post("/login", validateLogin, login);
+router.post("/google-login", googleLogin);
 router.post("/verify-email", verifyEmail);
 router.post("/resend-verification", resendVerificationEmail);
 router.post("/refresh-token", refreshAccessToken);

@@ -395,3 +395,54 @@ export const resetPassword = async (req, res) => {
     res.status(500).json({ message: "Server error" });
   }
 };
+
+// 🆕 NEW: Google Login
+export const googleLogin = async (req, res) => {
+    try {
+        const { email } = req.body;
+        
+        // 1. Find user by email
+        const user = await findUserByEmail(email);
+
+        if (!user) {
+            // User not registered (FE will prompt registration)
+            return res.status(404).json({ 
+                message: "User not found. Please register." 
+            });
+        }
+        
+        // Check if email is verified (standard login check)
+        if (!user.email_verified) {
+            return res.status(403).json({ 
+                message: "Please verify your email before logging in" 
+            });
+        }
+        
+        // 2. Create short-lived access token (15 minutes)
+        const accessToken = jwt.sign(
+            { id: user.id, email: user.email, role: user.role },
+            process.env.JWT_SECRET,
+            { expiresIn: "15m" }
+        );
+
+        // 3. Create long-lived refresh token (7 days)
+        const refreshToken = await createRefreshToken(user.id);
+
+        res.json({
+            message: "Google login successful",
+            accessToken,
+            refreshToken,
+            user: { 
+                id: user.id, 
+                email: user.email, 
+                role: user.role,
+                first_name: user.first_name,
+                last_name: user.last_name
+            },
+        });
+
+    } catch (err) {
+        console.error("❌ Google Login error:", err);
+        res.status(500).json({ message: "Server error" });
+    }
+};
