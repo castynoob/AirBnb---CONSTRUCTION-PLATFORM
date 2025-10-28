@@ -10,6 +10,7 @@ import paymentRoutes from "./src/routes/paymentRoutes.js";
 import messageRoutes from "./src/routes/messageRoutes.js";  // ✅ NEW
 import setupSocket from "./src/config/socketSetup.js";      // ✅ NEW
 import userRoutes from "./src/routes/userRoutes.js"
+import registrationRoutes from "./src/routes/registrationRoutes.js"
 import morgan from "morgan";
 
 dotenv.config();
@@ -55,7 +56,8 @@ app.use("/api/jobs", jobRoutes);
 app.use("/api/bids", bidRoutes);
 app.use("/api/properties", propertyRoutes);
 app.use("/api/payments", paymentRoutes);
-app.use("/api/messages", messageRoutes);  // ✅ NEW
+app.use("/api/messages", messageRoutes);
+app.use("/api", registrationRoutes);
 
 // ============================================
 // HEALTH CHECK

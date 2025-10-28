@@ -5,7 +5,8 @@ import {
   getProfile,
   getEntrepreneurProfile,
   getEntrepreneurProfileById,
-  getManagerProfileByUserId, // ✅ add this
+  getManagerProfileByUserId,
+  getEntrepreneurProfileByUserId
 } from "../controllers/userController.js";
 
 import { authorizeRoles } from "../middleware/roleMiddleware.js";
@@ -36,6 +37,13 @@ router.get(
   authenticateToken,
   authorizeRoles("entrepreneur", "property_manager"),
   getManagerProfileByUserId
+);
+
+router.get(
+  "/entrepreneur/user/:userId",
+  authenticateToken,
+  authorizeRoles("entrepreneur", "property_manager"),
+  getEntrepreneurProfileByUserId
 );
 
 

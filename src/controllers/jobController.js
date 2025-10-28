@@ -99,3 +99,29 @@ export const getJobsByManagerId = async (req, res) => {
     res.status(500).json({ message: "Server error" });
   }
 };
+
+
+export const getJobsByEntrepreneurId = async (req, res) => {
+  try {
+    const { entrepreneur_id } = req.params;
+
+    const result = await pool.query(
+      `
+      SELECT *
+      FROM jobs
+      WHERE entrepreneur_id = $1
+      ORDER BY created_at DESC
+      `,
+      [entrepreneur_id]
+    );
+
+    res.json({
+      message: "Jobs retrieved successfully",
+      count: result.rows.length,
+      jobs: result.rows
+    });
+  } catch (err) {
+    console.error("❌ Error fetching jobs by entrepreneur ID:", err);
+    res.status(500).json({ message: "Server error" });
+  }
+};

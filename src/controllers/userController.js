@@ -142,3 +142,54 @@ export const getManagerProfileByUserId = async (req, res) => {
     res.status(500).json({ message: "Server error" });
   }
 };
+
+// 🆕 Get Entrepreneur Profile by User ID
+export const getEntrepreneurProfileByUserId = async (req, res) => {
+  try {
+    const userId = req.params.userId;
+
+    // Check if user exists
+    const userResult = await pool.query(
+      "SELECT id, role FROM users WHERE id = $1",
+      [userId]
+    );
+
+    if (userResult.rows.length === 0) {
+      return res.status(404).json({ message: "User not found" });
+    }
+
+    const userRole = userResult.rows[0].role;
+    if (userRole !== "entrepreneur") {
+      return res.status(403).json({
+        message: "Access denied: The provided user is not an entrepreneur",
+      });
+    }
+
+    // Fetch entrepreneur profile by the user_id
+    const entrepreneur = await pool.query(
+      `SELECT ep.*, 
+              u.email, 
+              u.first_name, 
+              u.last_name, 
+              u.role 
+       FROM entrepreneur_profiles ep
+       JOIN users u ON ep.user_id = u.id
+       WHERE ep.user_id = $1`,
+      [userId]
+    );
+
+    if (entrepreneur.rows.length === 0) {
+      return res
+        .status(404)
+        .json({ message: "Entrepreneur profile not found for this user" });
+    }
+
+    res.status(200).json({
+      message: "Entrepreneur profile fetched successfully by user ID",
+      profile: entrepreneur.rows[0],
+    });
+  } catch (error) {
+    console.error("Error fetching entrepreneur profile by user ID:", error);
+    res.status(500).json({ message: "Server error" });
+  }
+};
