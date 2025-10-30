@@ -20,9 +20,8 @@ router.get("/manager/:manager_id", verifyToken, getJobsByManagerId); // ← Add 
 
 // Property managers only — create, update, delete jobs
 router.post("/", verifyToken, authorizeRoles("property_manager"), createJob);
-router.put("/:id", verifyToken, authorizeRoles("property_manager"), updateJob);
+router.put("/:id", verifyToken, authorizeRoles("property_manager", "entrepreneur"), updateJob);
 router.delete("/:id", verifyToken, authorizeRoles("property_manager"), deleteJob);
 router.get("/entrepreneur/:entrepreneur_id", verifyToken, getJobsByEntrepreneurId);
-
 
 export default router;

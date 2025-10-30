@@ -18,3 +18,20 @@ export const createUser = async ({ email, password, first_name, last_name, role 
     [email, password, first_name, last_name, role]
   );
 };
+
+
+export const getAllUsers = async () => {
+  const result = await pool.query("SELECT email, name FROM users");
+  return result.rows;
+};
+
+export const getAllEntrepreneurEmails = async () => {
+  const query = `
+    SELECT u.email, u.first_name, u.last_name
+    FROM entrepreneur_profiles ep
+    JOIN users u ON ep.user_id = u.id
+    WHERE u.email IS NOT NULL
+  `;
+  const result = await pool.query(query);
+  return result.rows;
+};
