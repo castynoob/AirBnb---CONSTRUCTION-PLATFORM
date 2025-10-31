@@ -11,14 +11,14 @@ const PLANS = {
     basic: {
         price_id: 'price_1SJU5t5Dbv5aHRPT6Q3phUCC',  // ✅ Your actual price ID
         name: 'Basic Entrepreneur Plan',
-        price: 25000,
+        price: 250,
         interval: 'month',
         bids_limit: 30
     },
     premium: {
         price_id: 'price_1SJU5t5Dbv5aHRPT6Q3phUCC',  // Use same for now to test
         name: 'Premium Entrepreneur Plan',
-        price: 42900,
+        price: 429,
         interval: 'month',
         bids_limit: -1
     }
