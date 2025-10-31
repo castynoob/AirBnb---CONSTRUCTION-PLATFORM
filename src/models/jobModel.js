@@ -87,3 +87,86 @@ export const getJobsByManagerId = async (manager_id) => {
   );
   return result.rows;
 };
+
+// 🟢 Get all jobs by entrepreneur ID
+export const getJobsByEntrepreneurId = async (entrepreneur_id) => {
+  const result = await pool.query(
+    `SELECT * FROM jobs WHERE entrepreneur_id = $1 ORDER BY created_at DESC`,
+    [entrepreneur_id]
+  );
+  return result.rows;
+};
+
+/**
+ * Bulk create multiple jobs from inspection Excel
+ * Used for creating jobs from parsed inspection reports
+ *
+ * @param {Array} jobsArray - Array of job objects
+ * @returns {Promise<Array>} Array of created jobs
+ */
+export const bulkCreateJobs = async (jobsArray) => {
+  const client = await pool.connect();
+
+  try {
+    await client.query('BEGIN');
+
+    const createdJobs = [];
+
+    for (const jobData of jobsArray) {
+      const {
+        property_id,
+        manager_id,
+        title,
+        description = '',
+        category = 'Other',
+        urgency = 'Medium',
+        due_date = null,
+        estimated_duration_days = null,
+        budget_min = null,
+        budget_max = null,
+        is_budget_hidden = false,
+        is_emergency = false,
+        status = 'Open',
+        location = null,
+      } = jobData;
+
+      const result = await client.query(
+        `INSERT INTO jobs (
+          property_id, manager_id, title, description, category, urgency,
+          due_date, estimated_duration_days, budget_min, budget_max,
+          is_budget_hidden, is_emergency, status
+        ) VALUES (
+          $1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13
+        ) RETURNING *`,
+        [
+          property_id,
+          manager_id,
+          title,
+          description,
+          category,
+          urgency,
+          due_date,
+          estimated_duration_days,
+          budget_min,
+          budget_max,
+          is_budget_hidden,
+          is_emergency,
+          status,
+        ]
+      );
+
+      createdJobs.push(result.rows[0]);
+    }
+
+    await client.query('COMMIT');
+    console.log(`[Job Model] ✓ Bulk created ${createdJobs.length} jobs`);
+
+    return createdJobs;
+  } catch (error) {
+    await client.query('ROLLBACK');
+    console.error('[Job Model] Bulk create error:', error);
+    throw error;
+  } finally {
+    client.release();
+  }
+};

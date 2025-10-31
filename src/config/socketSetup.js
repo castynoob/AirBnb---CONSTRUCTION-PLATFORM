@@ -134,7 +134,7 @@ const setupSocket = (server) => {
         const { conversationId } = data;
         
         // Update database to mark messages as read
-        await messageModel.markConversationAsRead(conversationId, socket.userId);
+        await messageModel.markMessagesAsRead(conversationId, socket.userId);
         
         // Notify the conversation that messages were read
         io.to(conversationId.toString()).emit('messages_read', {

@@ -1,0 +1,138 @@
+{
+  "fileName": "Maintenance_Plan_and_Log_1090_EN.xlsx",
+  "sheetName": "Maintenance Plan",
+  "totalRows": 39,
+  "totalColumns": 9,
+  "columns": [
+    {
+      "index": 0,
+      "name": "Due Date",
+      "sampleValues": [
+        "2026",
+        "2027",
+        "2027"
+      ],
+      "dataType": "string",
+      "hasData": true
+    },
+    {
+      "index": 1,
+      "name": "Uniformat Code",
+      "sampleValues": [
+        "A1010",
+        "D2091",
+        "D5010"
+      ],
+      "dataType": "string",
+      "hasData": true
+    },
+    {
+      "index": 2,
+      "name": "Component",
+      "sampleValues": [
+        "Cast-in-place concrete walls",
+        "Réseaux de distribution d’eau domestique, de drainage sanitaire et de gaz naturel",
+        "Electrical service entrance and main distribution"
+      ],
+      "dataType": "string",
+      "hasData": true
+    },
+    {
+      "index": 3,
+      "name": "Type of Work",
+      "sampleValues": [
+        "Major Repair",
+        "Provision for Major Repair",
+        "Provision for Replacement"
+      ],
+      "dataType": "string",
+      "hasData": true
+    },
+    {
+      "index": 4,
+      "name": "Title",
+      "sampleValues": [
+        "Injection des fissures par l’extérieur",
+        "Réparation majeure d’une partie des réseaux de plomberie et de gaz naturel",
+        "Replacement of electrical distribution network components"
+      ],
+      "dataType": "string",
+      "hasData": true
+    },
+    {
+      "index": 5,
+      "name": "Description",
+      "sampleValues": [
+        "La méthode de travail adéquate pour l’injection des fissures avec dégagement de la fondation par l’extérieur est à définir avec un professionnel. D'ordre général, les travaux comprennent l'excavation et le dégagement de la fondation sur sa pleine hauteur, l’injection de la fissure et la remise en état du site. Pour obtenir une réparation optimale, on devra ouvrir la fissure et nettoyer l’ouverture à l’aide d’une brosse métallique afin de retirer toute trace de contaminants ou de particules de béton lâches. Les tubes d’injection devront être installés au centre de la fissure ou selon les recommandations du fournisseur du produit. La fissure pourra ensuite être colmatée au moyen de mortier à prise rapide. Une fois la prise initiale du mortier terminée, on peut procéder à l’injection d’un produit à base de polyuréthane dans les tubes d’injection selon la méthodologie transmise par le fournisseur du produit. La fondation peut ensuite être renchaussée et le terrain remis en état.",
+        "Les travaux, lorsque requis, consistent à remplacer les sections du réseau d’eau, du réseau de drainage ou du gaz naturel, dont les composantes sont désuètes. Pour les sections dissimulées dans des murs et plafonds, ces interventions peuvent être difficiles à mettre en œuvre puisqu’elles nécessitent des ouvertures, des travaux de remise en état et de la finition.",
+        "The work, when required, consists of replacing damaged or obsolete components."
+      ],
+      "dataType": "string",
+      "hasData": true
+    },
+    {
+      "index": 6,
+      "name": "Current Estimated Cost",
+      "sampleValues": [
+        2750,
+        313.5,
+        435
+      ],
+      "dataType": "number",
+      "hasData": true
+    },
+    {
+      "index": 7,
+      "name": "Future Estimated Cost After Tax",
+      "sampleValues": [
+        3256.666875,
+        382.3978244625,
+        530.599852125
+      ],
+      "dataType": "number",
+      "hasData": true
+    },
+    {
+      "index": 8,
+      "name": "",
+      "sampleValues": [],
+      "dataType": "undefined",
+      "hasData": false
+    }
+  ],
+  "sampleRows": [
+    [
+      "2026",
+      "A1010",
+      "Cast-in-place concrete walls",
+      "Major Repair",
+      "Injection des fissures par l’extérieur",
+      "La méthode de travail adéquate pour l’injection des fissures avec dégagement de la fondation par l’extérieur est à définir avec un professionnel. D'ordre général, les travaux comprennent l'excavation et le dégagement de la fondation sur sa pleine hauteur, l’injection de la fissure et la remise en état du site. Pour obtenir une réparation optimale, on devra ouvrir la fissure et nettoyer l’ouverture à l’aide d’une brosse métallique afin de retirer toute trace de contaminants ou de particules de béton lâches. Les tubes d’injection devront être installés au centre de la fissure ou selon les recommandations du fournisseur du produit. La fissure pourra ensuite être colmatée au moyen de mortier à prise rapide. Une fois la prise initiale du mortier terminée, on peut procéder à l’injection d’un produit à base de polyuréthane dans les tubes d’injection selon la méthodologie transmise par le fournisseur du produit. La fondation peut ensuite être renchaussée et le terrain remis en état.",
+      2750,
+      3256.666875,
+      ""
+    ],
+    [
+      "2027",
+      "D2091",
+      "Réseaux de distribution d’eau domestique, de drainage sanitaire et de gaz naturel",
+      "Provision for Major Repair",
+      "Réparation majeure d’une partie des réseaux de plomberie et de gaz naturel",
+      "Les travaux, lorsque requis, consistent à remplacer les sections du réseau d’eau, du réseau de drainage ou du gaz naturel, dont les composantes sont désuètes. Pour les sections dissimulées dans des murs et plafonds, ces interventions peuvent être difficiles à mettre en œuvre puisqu’elles nécessitent des ouvertures, des travaux de remise en état et de la finition.",
+      313.5,
+      382.3978244625,
+      ""
+    ],
+    [
+      "2027",
+      "D5010",
+      "Electrical service entrance and main distribution",
+      "Provision for Replacement",
+      "Replacement of electrical distribution network components",
+      "The work, when required, consists of replacing damaged or obsolete components.",
+      435,
+      530.599852125,
+      ""
+    ]
+  ]
+}

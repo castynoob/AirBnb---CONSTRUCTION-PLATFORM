@@ -1,6 +1,8 @@
 // src/controllers/propertyController.js
 import pool from "../config/db.js";
 import * as Property from "../models/propertyModel.js";
+import { uploadToSupabase, deleteFromSupabase, getPublicUrl, extractFilePathFromUrl, generateUniqueFileName } from '../utils/supabaseHelpers.js';
+import { BUCKETS } from '../config/supabase.js';
 
 // 🟢 Create a new property (Manager only)
 export const createProperty = async (req, res) => {
@@ -251,5 +253,183 @@ export const getAllProperties = async (req, res) => {
   } catch (err) {
     console.error("❌ Error fetching all properties:", err);
     res.status(500).json({ message: "Server error" });
+  }
+};
+
+// ========================================
+// 🏢 PROPERTY IMAGE UPLOAD FUNCTIONS
+// ========================================
+
+/**
+ * Upload Property Image
+ * POST /api/properties/:id/image
+ *
+ * Uploads property image to Supabase and updates properties table
+ */
+export const uploadPropertyImage = async (req, res) => {
+  try {
+    const { id } = req.params;
+    const userId = req.user.id;
+
+    // Validate file exists
+    if (!req.file) {
+      return res.status(400).json({
+        error: 'No file uploaded',
+        message: 'Please provide an image file',
+      });
+    }
+
+    // Get property
+    const property = await Property.getPropertyById(id);
+
+    if (!property) {
+      return res.status(404).json({ message: "Property not found" });
+    }
+
+    // Get manager profile to verify ownership
+    const managerProfile = await pool.query(
+      `SELECT id FROM manager_profiles WHERE user_id = $1`,
+      [userId]
+    );
+
+    if (!managerProfile.rows[0]) {
+      return res.status(403).json({
+        message: "Property manager profile not found"
+      });
+    }
+
+    // Check if manager owns this property
+    if (property.manager_id !== managerProfile.rows[0].id) {
+      return res.status(403).json({
+        message: "You can only update your own properties"
+      });
+    }
+
+    const oldImageUrl = property.image;
+
+    // Generate unique filename
+    const uniqueFileName = generateUniqueFileName(req.file.originalname);
+    const filePath = `properties/${id}/${uniqueFileName}`;
+
+    // Upload to Supabase
+    const uploadResult = await uploadToSupabase({
+      fileBuffer: req.file.buffer,
+      bucket: BUCKETS.PROPERTY_IMAGES,
+      filePath: filePath,
+      contentType: req.file.mimetype,
+      upsert: false,
+    });
+
+    if (!uploadResult.success) {
+      return res.status(500).json({
+        error: 'Upload failed',
+        message: uploadResult.error,
+      });
+    }
+
+    // Get public URL
+    const imageUrl = getPublicUrl(BUCKETS.PROPERTY_IMAGES, uploadResult.data.path);
+
+    // Update database
+    await pool.query(
+      'UPDATE properties SET image = $1, updated_at = NOW() WHERE id = $2',
+      [imageUrl, id]
+    );
+
+    // Delete old image if exists
+    if (oldImageUrl) {
+      const oldFilePath = extractFilePathFromUrl(oldImageUrl, BUCKETS.PROPERTY_IMAGES);
+      if (oldFilePath) {
+        await deleteFromSupabase(BUCKETS.PROPERTY_IMAGES, oldFilePath);
+      }
+    }
+
+    console.log(`[Upload] ✓ Property image uploaded: ${id}`);
+
+    res.status(200).json({
+      message: 'Property image uploaded successfully',
+      imageUrl: imageUrl,
+    });
+
+  } catch (error) {
+    console.error('[Upload] Property image error:', error);
+    res.status(500).json({
+      message: 'Server error',
+      error: error.message
+    });
+  }
+};
+
+/**
+ * Delete Property Image
+ * DELETE /api/properties/:id/image
+ *
+ * Removes property image from Supabase and database
+ */
+export const deletePropertyImage = async (req, res) => {
+  try {
+    const { id } = req.params;
+    const userId = req.user.id;
+
+    // Get property
+    const property = await Property.getPropertyById(id);
+
+    if (!property) {
+      return res.status(404).json({ message: "Property not found" });
+    }
+
+    // Get manager profile to verify ownership
+    const managerProfile = await pool.query(
+      `SELECT id FROM manager_profiles WHERE user_id = $1`,
+      [userId]
+    );
+
+    if (!managerProfile.rows[0]) {
+      return res.status(403).json({
+        message: "Property manager profile not found"
+      });
+    }
+
+    // Check if manager owns this property
+    if (property.manager_id !== managerProfile.rows[0].id) {
+      return res.status(403).json({
+        message: "You can only update your own properties"
+      });
+    }
+
+    const imageUrl = property.image;
+
+    if (!imageUrl) {
+      return res.status(400).json({
+        message: 'No property image to delete'
+      });
+    }
+
+    // Extract file path from URL
+    const filePath = extractFilePathFromUrl(imageUrl, BUCKETS.PROPERTY_IMAGES);
+
+    if (filePath) {
+      // Delete from Supabase
+      await deleteFromSupabase(BUCKETS.PROPERTY_IMAGES, filePath);
+    }
+
+    // Update database
+    await pool.query(
+      'UPDATE properties SET image = NULL, updated_at = NOW() WHERE id = $1',
+      [id]
+    );
+
+    console.log(`[Upload] ✓ Property image deleted: ${id}`);
+
+    res.status(200).json({
+      message: 'Property image deleted successfully',
+    });
+
+  } catch (error) {
+    console.error('[Upload] Delete property image error:', error);
+    res.status(500).json({
+      message: 'Server error',
+      error: error.message
+    });
   }
 };

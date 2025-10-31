@@ -10,9 +10,9 @@ const pool = new Pool({
   database: process.env.PG_DB,
   password: process.env.PG_PASSWORD,
   port: process.env.PG_PORT,
-  // ssl: {
-  //   rejectUnauthorized: false, // ✅ Required for Render PostgreSQL
-  // },
+  ssl: {
+    rejectUnauthorized: false, // ✅ Required for Render PostgreSQL
+  },
 });
 
 // Test connection
