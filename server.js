@@ -120,6 +120,10 @@ app.use(express.json());
 // ============================================
 // ROUTES
 // ============================================
+// PUBLIC ROUTES (no auth) - must come BEFORE protected routes
+app.use("/api", registrationRoutes);
+
+// PROTECTED ROUTES
 app.use("/api/auth", authRoutes);
 app.use("/api/users", userRoutes);
 app.use("/api/jobs", jobRoutes);
@@ -130,7 +134,6 @@ app.use("/api", messageRoutes);
 app.use("/api/reviews", reviewRoutes);
 app.use("/api/chats", chatRoutes);
 app.use("/api/email", emailRoutes);
-app.use("/api", registrationRoutes);
 app.use("/api/inspections", inspectionRoutes);
 
 // ============================================
