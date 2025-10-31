@@ -13,22 +13,53 @@ import {
   googleLogin
 } from "../controllers/authController.js";
 import { validateRegistration, validateLogin } from "../middleware/validationMiddleware.js";
-import { authenticateToken } from "../middleware/authMiddleware.js";  // ← ADD THIS LINE!
+import { authenticateToken } from "../middleware/authMiddleware.js";
+import { invalidateCache } from "../middleware/cacheMiddleware.js";
+import { USER_KEYS } from "../utils/cacheKeys.js";
+import {
+  loginRateLimiter,
+  loginEmailRateLimiter,
+  registrationRateLimiter,
+  passwordResetRateLimiter,
+  verificationEmailRateLimiter
+} from "../middleware/rateLimitMiddleware.js";
 
 const router = express.Router();
 
-router.post("/register", validateRegistration, register);
-router.post("/login", validateLogin, login);
-router.post("/google-login", googleLogin);
+// Registration with rate limiting
+router.post("/register", registrationRateLimiter, validateRegistration, register);
+
+// Login with combined rate limiting (IP + email)
+router.post("/login", loginRateLimiter, loginEmailRateLimiter, validateLogin, login);
+
+// Google login with rate limiting
+router.post("/google-login", loginRateLimiter, googleLogin);
+
+// Email verification
 router.post("/verify-email", verifyEmail);
-router.post("/resend-verification", resendVerificationEmail);
+
+// Resend verification email with rate limiting
+router.post("/resend-verification", verificationEmailRateLimiter, resendVerificationEmail);
+
+// Refresh token
 router.post("/refresh-token", refreshAccessToken);
+
+// Logout
 router.post("/logout", logout);
-router.post("/request-password-reset", requestPasswordReset);
-router.post("/reset-password", resetPassword);
+
+// Password reset with rate limiting
+router.post("/request-password-reset", passwordResetRateLimiter, requestPasswordReset);
+router.post("/reset-password", passwordResetRateLimiter, resetPassword);
 
 // Profile endpoints (require authentication)
 router.get("/me", authenticateToken, getCurrentUser);
-router.put("/me", authenticateToken, updateCurrentUser);
+
+// Update profile - invalidate user caches
+router.put(
+  "/me",
+  authenticateToken,
+  invalidateCache((req) => [USER_KEYS.allForUser(req.user.id || req.user.userId)]),
+  updateCurrentUser
+);
 
 export default router;

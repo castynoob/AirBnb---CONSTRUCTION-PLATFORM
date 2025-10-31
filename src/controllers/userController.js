@@ -1,5 +1,7 @@
 // ✅ src/controllers/userController.js
 import pool from "../config/db.js";
+import { uploadToSupabase, deleteFromSupabase, getPublicUrl, extractFilePathFromUrl, generateUniqueFileName } from '../utils/supabaseHelpers.js';
+import { BUCKETS } from '../config/supabase.js';
 
 // Existing controllers (keep them)
 export const getProfile = async (req, res) => {
@@ -217,5 +219,301 @@ export const getManagerProfileById = async (req, res) => {
   } catch (error) {
     console.error("Error fetching manager by id:", error);
     res.status(500).json({ message: "Server error" });
+  }
+};
+
+// ========================================
+// 📸 PROFILE IMAGE UPLOAD FUNCTIONS
+// ========================================
+
+/**
+ * Upload Manager Profile Picture
+ * POST /api/users/manager/profile-picture
+ *
+ * Uploads profile image to Supabase and updates manager_profiles table
+ */
+export const uploadManagerProfilePicture = async (req, res) => {
+  try {
+    const userId = req.user.id;
+
+    // Validate file exists
+    if (!req.file) {
+      return res.status(400).json({
+        error: 'No file uploaded',
+        message: 'Please provide an image file',
+      });
+    }
+
+    // Get manager profile
+    const managerResult = await pool.query(
+      'SELECT id, image FROM manager_profiles WHERE user_id = $1',
+      [userId]
+    );
+
+    if (managerResult.rows.length === 0) {
+      return res.status(404).json({
+        message: 'Manager profile not found'
+      });
+    }
+
+    const managerProfile = managerResult.rows[0];
+    const oldImageUrl = managerProfile.image;
+
+    // Generate unique filename
+    const uniqueFileName = generateUniqueFileName(req.file.originalname);
+    const filePath = `managers/${userId}/${uniqueFileName}`;
+
+    // Upload to Supabase
+    const uploadResult = await uploadToSupabase({
+      fileBuffer: req.file.buffer,
+      bucket: BUCKETS.PROFILE_IMAGES,
+      filePath: filePath,
+      contentType: req.file.mimetype,
+      upsert: false,
+    });
+
+    if (!uploadResult.success) {
+      return res.status(500).json({
+        error: 'Upload failed',
+        message: uploadResult.error,
+      });
+    }
+
+    // Get public URL
+    const imageUrl = getPublicUrl(BUCKETS.PROFILE_IMAGES, uploadResult.data.path);
+
+    // Update database
+    await pool.query(
+      'UPDATE manager_profiles SET image = $1, updated_at = NOW() WHERE id = $2',
+      [imageUrl, managerProfile.id]
+    );
+
+    // Delete old image if exists
+    if (oldImageUrl) {
+      const oldFilePath = extractFilePathFromUrl(oldImageUrl, BUCKETS.PROFILE_IMAGES);
+      if (oldFilePath) {
+        await deleteFromSupabase(BUCKETS.PROFILE_IMAGES, oldFilePath);
+      }
+    }
+
+    console.log(`[Upload] ✓ Manager profile picture uploaded: ${userId}`);
+
+    res.status(200).json({
+      message: 'Profile picture uploaded successfully',
+      imageUrl: imageUrl,
+    });
+
+  } catch (error) {
+    console.error('[Upload] Manager profile picture error:', error);
+    res.status(500).json({
+      message: 'Server error',
+      error: error.message
+    });
+  }
+};
+
+/**
+ * Upload Entrepreneur Profile Picture
+ * POST /api/users/entrepreneur/profile-picture
+ *
+ * Uploads profile image to Supabase and updates entrepreneur_profiles table
+ */
+export const uploadEntrepreneurProfilePicture = async (req, res) => {
+  try {
+    const userId = req.user.id;
+
+    // Validate file exists
+    if (!req.file) {
+      return res.status(400).json({
+        error: 'No file uploaded',
+        message: 'Please provide an image file',
+      });
+    }
+
+    // Get entrepreneur profile
+    const entrepreneurResult = await pool.query(
+      'SELECT id, image FROM entrepreneur_profiles WHERE user_id = $1',
+      [userId]
+    );
+
+    if (entrepreneurResult.rows.length === 0) {
+      return res.status(404).json({
+        message: 'Entrepreneur profile not found'
+      });
+    }
+
+    const entrepreneurProfile = entrepreneurResult.rows[0];
+    const oldImageUrl = entrepreneurProfile.image;
+
+    // Generate unique filename
+    const uniqueFileName = generateUniqueFileName(req.file.originalname);
+    const filePath = `entrepreneurs/${userId}/${uniqueFileName}`;
+
+    // Upload to Supabase
+    const uploadResult = await uploadToSupabase({
+      fileBuffer: req.file.buffer,
+      bucket: BUCKETS.PROFILE_IMAGES,
+      filePath: filePath,
+      contentType: req.file.mimetype,
+      upsert: false,
+    });
+
+    if (!uploadResult.success) {
+      return res.status(500).json({
+        error: 'Upload failed',
+        message: uploadResult.error,
+      });
+    }
+
+    // Get public URL
+    const imageUrl = getPublicUrl(BUCKETS.PROFILE_IMAGES, uploadResult.data.path);
+
+    // Update database
+    await pool.query(
+      'UPDATE entrepreneur_profiles SET image = $1, updated_at = NOW() WHERE id = $2',
+      [imageUrl, entrepreneurProfile.id]
+    );
+
+    // Delete old image if exists
+    if (oldImageUrl) {
+      const oldFilePath = extractFilePathFromUrl(oldImageUrl, BUCKETS.PROFILE_IMAGES);
+      if (oldFilePath) {
+        await deleteFromSupabase(BUCKETS.PROFILE_IMAGES, oldFilePath);
+      }
+    }
+
+    console.log(`[Upload] ✓ Entrepreneur profile picture uploaded: ${userId}`);
+
+    res.status(200).json({
+      message: 'Profile picture uploaded successfully',
+      imageUrl: imageUrl,
+    });
+
+  } catch (error) {
+    console.error('[Upload] Entrepreneur profile picture error:', error);
+    res.status(500).json({
+      message: 'Server error',
+      error: error.message
+    });
+  }
+};
+
+/**
+ * Delete Manager Profile Picture
+ * DELETE /api/users/manager/profile-picture
+ *
+ * Removes profile image from Supabase and database
+ */
+export const deleteManagerProfilePicture = async (req, res) => {
+  try {
+    const userId = req.user.id;
+
+    // Get manager profile
+    const managerResult = await pool.query(
+      'SELECT id, image FROM manager_profiles WHERE user_id = $1',
+      [userId]
+    );
+
+    if (managerResult.rows.length === 0) {
+      return res.status(404).json({
+        message: 'Manager profile not found'
+      });
+    }
+
+    const managerProfile = managerResult.rows[0];
+    const imageUrl = managerProfile.image;
+
+    if (!imageUrl) {
+      return res.status(400).json({
+        message: 'No profile picture to delete'
+      });
+    }
+
+    // Extract file path from URL
+    const filePath = extractFilePathFromUrl(imageUrl, BUCKETS.PROFILE_IMAGES);
+
+    if (filePath) {
+      // Delete from Supabase
+      await deleteFromSupabase(BUCKETS.PROFILE_IMAGES, filePath);
+    }
+
+    // Update database
+    await pool.query(
+      'UPDATE manager_profiles SET image = NULL, updated_at = NOW() WHERE id = $1',
+      [managerProfile.id]
+    );
+
+    console.log(`[Upload] ✓ Manager profile picture deleted: ${userId}`);
+
+    res.status(200).json({
+      message: 'Profile picture deleted successfully',
+    });
+
+  } catch (error) {
+    console.error('[Upload] Delete manager profile picture error:', error);
+    res.status(500).json({
+      message: 'Server error',
+      error: error.message
+    });
+  }
+};
+
+/**
+ * Delete Entrepreneur Profile Picture
+ * DELETE /api/users/entrepreneur/profile-picture
+ *
+ * Removes profile image from Supabase and database
+ */
+export const deleteEntrepreneurProfilePicture = async (req, res) => {
+  try {
+    const userId = req.user.id;
+
+    // Get entrepreneur profile
+    const entrepreneurResult = await pool.query(
+      'SELECT id, image FROM entrepreneur_profiles WHERE user_id = $1',
+      [userId]
+    );
+
+    if (entrepreneurResult.rows.length === 0) {
+      return res.status(404).json({
+        message: 'Entrepreneur profile not found'
+      });
+    }
+
+    const entrepreneurProfile = entrepreneurResult.rows[0];
+    const imageUrl = entrepreneurProfile.image;
+
+    if (!imageUrl) {
+      return res.status(400).json({
+        message: 'No profile picture to delete'
+      });
+    }
+
+    // Extract file path from URL
+    const filePath = extractFilePathFromUrl(imageUrl, BUCKETS.PROFILE_IMAGES);
+
+    if (filePath) {
+      // Delete from Supabase
+      await deleteFromSupabase(BUCKETS.PROFILE_IMAGES, filePath);
+    }
+
+    // Update database
+    await pool.query(
+      'UPDATE entrepreneur_profiles SET image = NULL, updated_at = NOW() WHERE id = $1',
+      [entrepreneurProfile.id]
+    );
+
+    console.log(`[Upload] ✓ Entrepreneur profile picture deleted: ${userId}`);
+
+    res.status(200).json({
+      message: 'Profile picture deleted successfully',
+    });
+
+  } catch (error) {
+    console.error('[Upload] Delete entrepreneur profile picture error:', error);
+    res.status(500).json({
+      message: 'Server error',
+      error: error.message
+    });
   }
 };

@@ -1,0 +1,13 @@
+{
+  "timestamp": "2025-10-30T15:13:03.934Z",
+  "results": {
+    "passed": 2,
+    "failed": 7,
+    "skipped": 0
+  },
+  "testIds": {
+    "userId": null,
+    "propertyId": null,
+    "inspectionId": null
+  }
+}

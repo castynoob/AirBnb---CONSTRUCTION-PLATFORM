@@ -1,6 +1,8 @@
 // ✅ src/controllers/jobController.js (ESM version)
 import * as Job from "../models/jobModel.js";
 import pool from "../config/db.js";
+import { uploadToSupabase, deleteFromSupabase, getPublicUrl, extractFilePathFromUrl, generateUniqueFileName } from '../utils/supabaseHelpers.js';
+import { BUCKETS } from '../config/supabase.js';
 // 🟢 Create new job (manager only)
 export const createJob = async (req, res) => {
   try {
@@ -123,5 +125,237 @@ export const getJobsByEntrepreneurId = async (req, res) => {
   } catch (err) {
     console.error("❌ Error fetching jobs by entrepreneur ID:", err);
     res.status(500).json({ message: "Server error" });
+  }
+};
+
+// ========================================
+// 🖼️ JOB IMAGE UPLOAD FUNCTIONS
+// ========================================
+
+/**
+ * Upload Job Image(s)
+ * POST /api/jobs/:id/images
+ *
+ * Uploads job image(s) to Supabase and stores in images table
+ * Supports both single and multiple image uploads
+ */
+export const uploadJobImages = async (req, res) => {
+  try {
+    const { id: jobId } = req.params;
+    const userId = req.user.id;
+
+    // Validate files exist (can be single or multiple)
+    const files = req.files || (req.file ? [req.file] : []);
+
+    if (files.length === 0) {
+      return res.status(400).json({
+        error: 'No files uploaded',
+        message: 'Please provide at least one image file',
+      });
+    }
+
+    // Get job to verify it exists
+    const job = await Job.getJobById(jobId);
+
+    if (!job) {
+      return res.status(404).json({ message: "Job not found" });
+    }
+
+    // Verify user has permission (manager who owns the job or entrepreneur)
+    const managerProfile = await pool.query(
+      `SELECT id FROM manager_profiles WHERE user_id = $1`,
+      [userId]
+    );
+
+    const entrepreneurProfile = await pool.query(
+      `SELECT id FROM entrepreneur_profiles WHERE user_id = $1`,
+      [userId]
+    );
+
+    const isManager = managerProfile.rows.length > 0 &&
+                     job.manager_id === managerProfile.rows[0].id;
+    const isEntrepreneur = entrepreneurProfile.rows.length > 0;
+
+    if (!isManager && !isEntrepreneur) {
+      return res.status(403).json({
+        message: "You don't have permission to upload images for this job"
+      });
+    }
+
+    const uploadedImages = [];
+    const errors = [];
+
+    // Upload each file
+    for (const file of files) {
+      try {
+        // Generate unique filename
+        const uniqueFileName = generateUniqueFileName(file.originalname);
+        const filePath = `jobs/${jobId}/${uniqueFileName}`;
+
+        // Upload to Supabase
+        const uploadResult = await uploadToSupabase({
+          fileBuffer: file.buffer,
+          bucket: BUCKETS.JOB_IMAGES,
+          filePath: filePath,
+          contentType: file.mimetype,
+          upsert: false,
+        });
+
+        if (!uploadResult.success) {
+          errors.push({
+            filename: file.originalname,
+            error: uploadResult.error
+          });
+          continue;
+        }
+
+        // Get public URL
+        const imageUrl = getPublicUrl(BUCKETS.JOB_IMAGES, uploadResult.data.path);
+
+        // Insert into images table
+        const imageResult = await pool.query(
+          `INSERT INTO images (job_id, image_url, uploaded_by, caption, created_at)
+           VALUES ($1, $2, $3, $4, NOW())
+           RETURNING *`,
+          [jobId, imageUrl, userId, req.body.caption || null]
+        );
+
+        uploadedImages.push(imageResult.rows[0]);
+
+      } catch (error) {
+        errors.push({
+          filename: file.originalname,
+          error: error.message
+        });
+      }
+    }
+
+    console.log(`[Upload] ✓ Job images uploaded: ${uploadedImages.length} successful, ${errors.length} failed`);
+
+    res.status(200).json({
+      message: `Successfully uploaded ${uploadedImages.length} image(s)`,
+      images: uploadedImages,
+      errors: errors.length > 0 ? errors : undefined,
+    });
+
+  } catch (error) {
+    console.error('[Upload] Job images error:', error);
+    res.status(500).json({
+      message: 'Server error',
+      error: error.message
+    });
+  }
+};
+
+/**
+ * Get Job Images
+ * GET /api/jobs/:id/images
+ *
+ * Retrieves all images for a specific job
+ */
+export const getJobImages = async (req, res) => {
+  try {
+    const { id: jobId } = req.params;
+
+    // Verify job exists
+    const job = await Job.getJobById(jobId);
+
+    if (!job) {
+      return res.status(404).json({ message: "Job not found" });
+    }
+
+    // Get all images for this job
+    const result = await pool.query(
+      `SELECT i.*, u.first_name, u.last_name, u.email
+       FROM images i
+       LEFT JOIN users u ON i.uploaded_by = u.id
+       WHERE i.job_id = $1
+       ORDER BY i.created_at DESC`,
+      [jobId]
+    );
+
+    res.status(200).json({
+      message: 'Job images retrieved successfully',
+      count: result.rows.length,
+      images: result.rows,
+    });
+
+  } catch (error) {
+    console.error('[Upload] Get job images error:', error);
+    res.status(500).json({
+      message: 'Server error',
+      error: error.message
+    });
+  }
+};
+
+/**
+ * Delete Job Image
+ * DELETE /api/jobs/:jobId/images/:imageId
+ *
+ * Deletes a specific job image from Supabase and database
+ */
+export const deleteJobImage = async (req, res) => {
+  try {
+    const { jobId, imageId } = req.params;
+    const userId = req.user.id;
+
+    // Get image details
+    const imageResult = await pool.query(
+      `SELECT * FROM images WHERE id = $1 AND job_id = $2`,
+      [imageId, jobId]
+    );
+
+    if (imageResult.rows.length === 0) {
+      return res.status(404).json({
+        message: 'Image not found'
+      });
+    }
+
+    const image = imageResult.rows[0];
+
+    // Verify user has permission (uploader, job manager, or admin)
+    const managerProfile = await pool.query(
+      `SELECT mp.id FROM manager_profiles mp
+       JOIN jobs j ON j.manager_id = mp.id
+       WHERE mp.user_id = $1 AND j.id = $2`,
+      [userId, jobId]
+    );
+
+    const isUploader = image.uploaded_by === userId;
+    const isJobManager = managerProfile.rows.length > 0;
+
+    if (!isUploader && !isJobManager) {
+      return res.status(403).json({
+        message: "You don't have permission to delete this image"
+      });
+    }
+
+    // Extract file path from URL
+    const filePath = extractFilePathFromUrl(image.image_url, BUCKETS.JOB_IMAGES);
+
+    if (filePath) {
+      // Delete from Supabase
+      await deleteFromSupabase(BUCKETS.JOB_IMAGES, filePath);
+    }
+
+    // Delete from database
+    await pool.query(
+      `DELETE FROM images WHERE id = $1`,
+      [imageId]
+    );
+
+    console.log(`[Upload] ✓ Job image deleted: ${imageId}`);
+
+    res.status(200).json({
+      message: 'Image deleted successfully',
+    });
+
+  } catch (error) {
+    console.error('[Upload] Delete job image error:', error);
+    res.status(500).json({
+      message: 'Server error',
+      error: error.message
+    });
   }
 };

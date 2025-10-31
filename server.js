@@ -1,8 +1,26 @@
+// ============================================
+// LOAD ENVIRONMENT VARIABLES FIRST
+// ============================================
+import dotenv from "dotenv";
+dotenv.config();
+
+// ============================================
+// REGULAR IMPORTS
+// ============================================
 import express from "express";
 import cors from "cors";
-import dotenv from "dotenv";
 import { createServer } from "http";
 import morgan from "morgan";
+
+// ============================================
+// REDIS CONFIGURATION
+// ============================================
+import { getRedisInfo, pingRedis, closeRedis } from "./src/config/redis.js";
+
+// ============================================
+// SUPABASE CONFIGURATION
+// ============================================
+import { getSupabaseInfo } from "./src/config/supabase.js";
 
 // ============================================
 // ROUTE IMPORTS
@@ -18,6 +36,7 @@ import reviewRoutes from "./src/routes/reviewRoutes.js";
 import chatRoutes from "./src/routes/chatRoutes.js";
 import emailRoutes from "./src/routes/emailRoutes.js"
 import registrationRoutes from "./src/routes/registrationRoutes.js";
+import inspectionRoutes from "./src/routes/inspectionRoutes.js";
 
 // ============================================
 // SOCKET SETUP
@@ -27,9 +46,45 @@ import setupSocket from "./src/config/socketSetup.js";
 // ============================================
 // APP CONFIG
 // ============================================
-dotenv.config();
 const app = express();
 app.use(morgan("dev"));
+
+// ============================================
+// REDIS CONNECTION CHECK
+// ============================================
+(async () => {
+  const redisInfo = getRedisInfo();
+  console.log('[Redis] Configuration:', {
+    host: redisInfo.host,
+    port: redisInfo.port,
+    status: redisInfo.status
+  });
+
+  const isConnected = await pingRedis();
+  if (isConnected) {
+    console.log('[Redis] ✓ Connection successful - Caching enabled');
+  } else {
+    console.log('[Redis] ⚠ Connection failed - App will run without caching');
+  }
+})();
+
+// ============================================
+// SUPABASE CONNECTION CHECK
+// ============================================
+(() => {
+  const supabaseInfo = getSupabaseInfo();
+  console.log('[Supabase] Configuration:', {
+    url: supabaseInfo.url,
+    isConfigured: supabaseInfo.isConfigured,
+  });
+
+  if (supabaseInfo.isConfigured) {
+    console.log('[Supabase] ✓ Configured - File uploads enabled');
+  } else {
+    console.log('[Supabase] ⚠ Not configured - File uploads will not work');
+    console.log('[Supabase] Add SUPABASE_URL and SUPABASE_SERVICE_ROLE_KEY to .env');
+  }
+})();
 
 // ============================================
 // CREATE HTTP SERVER (for Socket.io)
@@ -71,20 +126,23 @@ app.use("/api/jobs", jobRoutes);
 app.use("/api/bids", bidRoutes);
 app.use("/api/properties", propertyRoutes);
 app.use("/api/payments", paymentRoutes);
-app.use("/api/messages", messageRoutes);
+app.use("/api", messageRoutes);
 app.use("/api/reviews", reviewRoutes);
 app.use("/api/chats", chatRoutes);
 app.use("/api/email", emailRoutes);
 app.use("/api", registrationRoutes);
+app.use("/api/inspections", inspectionRoutes);
 
 // ============================================
 // HEALTH CHECK
 // ============================================
-app.get("/health", (req, res) => {
+app.get("/health", async (req, res) => {
+  const redisConnected = await pingRedis();
   res.json({
     status: "OK",
     message: "Construction Platform API is running",
     socketio: "Connected",
+    redis: redisConnected ? "Connected" : "Disconnected (running without cache)",
   });
 });
 
@@ -97,3 +155,31 @@ server.listen(PORT, "0.0.0.0", () => {
   console.log(`🚀 Server running on http://0.0.0.0:${PORT}`);
   console.log(`💬 Socket.io ready for real-time messaging`);
 });
+
+// ============================================
+// GRACEFUL SHUTDOWN
+// ============================================
+const gracefulShutdown = async (signal) => {
+  console.log(`\n${signal} received. Starting graceful shutdown...`);
+
+  // Close server
+  server.close(async () => {
+    console.log('HTTP server closed');
+
+    // Close Redis connection
+    await closeRedis();
+
+    console.log('Graceful shutdown complete');
+    process.exit(0);
+  });
+
+  // Force shutdown after 10 seconds
+  setTimeout(() => {
+    console.error('Could not close connections in time, forcefully shutting down');
+    process.exit(1);
+  }, 10000);
+};
+
+// Listen for termination signals
+process.on('SIGTERM', () => gracefulShutdown('SIGTERM'));
+process.on('SIGINT', () => gracefulShutdown('SIGINT'));

@@ -1,6 +1,8 @@
 import stripe from '../config/stripe.js';
 import Subscription from '../models/subscriptionModel.js';
 import db from '../config/db.js';
+import * as cache from '../config/cache.js';
+import { SUBSCRIPTION_KEYS } from '../utils/cacheKeys.js';
 
 // ✅ UPDATED - Add price_id for each plan
 // TODO: Replace these with your actual Stripe price IDs from dashboard
@@ -473,12 +475,24 @@ const PaymentController = {
                         current_period_end: new Date(subscription.current_period_end * 1000)
                     });
                     console.log(`✅ Subscription ${subscription.id} updated to status: ${subscription.status}`);
+
+                    // Invalidate subscription cache
+                    if (subscription.metadata.user_id) {
+                        await cache.del(SUBSCRIPTION_KEYS.status(subscription.metadata.user_id));
+                        console.log(`🗑️ Cache invalidated for user ${subscription.metadata.user_id}`);
+                    }
                     break;
 
                 case 'customer.subscription.deleted':
                     const deletedSub = event.data.object;
                     await Subscription.updateStatus(deletedSub.id, 'canceled');
                     console.log(`🗑️ Subscription ${deletedSub.id} canceled`);
+
+                    // Invalidate subscription cache
+                    if (deletedSub.metadata?.user_id) {
+                        await cache.del(SUBSCRIPTION_KEYS.status(deletedSub.metadata.user_id));
+                        console.log(`🗑️ Cache invalidated for user ${deletedSub.metadata.user_id}`);
+                    }
                     break;
 
                 case 'invoice.payment_failed':
@@ -486,12 +500,34 @@ const PaymentController = {
                     if (failedInvoice.subscription) {
                         await Subscription.updateStatus(failedInvoice.subscription, 'past_due');
                         console.log(`❌ Payment failed for subscription ${failedInvoice.subscription}`);
+
+                        // Get user_id from subscription and invalidate cache
+                        const subData = await db.query(
+                            'SELECT user_id FROM subscriptions WHERE stripe_subscription_id = $1',
+                            [failedInvoice.subscription]
+                        );
+                        if (subData.rows.length > 0) {
+                            await cache.del(SUBSCRIPTION_KEYS.status(subData.rows[0].user_id));
+                            console.log(`🗑️ Cache invalidated for user ${subData.rows[0].user_id}`);
+                        }
                     }
                     break;
 
                 case 'invoice.payment_succeeded':
                     const succeededInvoice = event.data.object;
                     console.log(`✅ Payment succeeded for subscription ${succeededInvoice.subscription}`);
+
+                    // Invalidate subscription cache on successful payment
+                    if (succeededInvoice.subscription) {
+                        const subData = await db.query(
+                            'SELECT user_id FROM subscriptions WHERE stripe_subscription_id = $1',
+                            [succeededInvoice.subscription]
+                        );
+                        if (subData.rows.length > 0) {
+                            await cache.del(SUBSCRIPTION_KEYS.status(subData.rows[0].user_id));
+                            console.log(`🗑️ Cache invalidated for user ${subData.rows[0].user_id}`);
+                        }
+                    }
                     break;
 
                 default:

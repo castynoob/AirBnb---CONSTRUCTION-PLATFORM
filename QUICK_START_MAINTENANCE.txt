@@ -1,0 +1,151 @@
+================================================================================
+  🏗️ MAINTENANCE TEMPLATE - QUICK START GUIDE
+================================================================================
+
+YOUR TEMPLATE: Maintenance_Plan_and_Log_1090_EN.xlsx
+STATUS: ✅ FULLY SUPPORTED - Ready to use!
+
+================================================================================
+WHAT WAS DONE
+================================================================================
+
+✅ Analyzed your Excel template (39 jobs)
+✅ Created smart parser with auto-detection
+✅ Added support for Uniformat codes
+✅ Built intelligent category mapping
+✅ Implemented urgency conversion
+✅ Tested successfully (100% parse rate)
+✅ Mixed language support (French/English)
+
+================================================================================
+QUICK TEST (30 SECONDS)
+================================================================================
+
+1. Open browser:
+   http://localhost:8080/test-inspection-ui.html
+
+2. Login with:
+   Email: manager@test.com
+   Password: password123
+
+3. Select any property from dropdown
+
+4. Upload your file:
+   template/Maintenance_Plan_and_Log_1090_EN.xlsx
+
+5. Watch it parse all 39 jobs automatically!
+
+6. Click "Create 39 Jobs"
+
+7. Done! ✨
+
+================================================================================
+WHAT HAPPENS AUTOMATICALLY
+================================================================================
+
+Your Column              → System Field      → Example
+─────────────────────────────────────────────────────────────────
+Title                    → Job Title         → "Injection des fissures..."
+Description              → Description       → Full text preserved
+Component                → Category          → "Plumbing" (from keywords)
+Uniformat Code          → Category          → "Plumbing" (from D2091)
+Type of Work            → Urgency           → "High" (from "Major Repair")
+Current Estimated Cost  → Budget            → $2,750 → Range: $2,200-$3,300
+Due Date                → Due Date          → 2026-01-01
+
+================================================================================
+AUTOMATIC CATEGORY DETECTION
+================================================================================
+
+Uniformat Code / Component Keywords → Category Assigned
+─────────────────────────────────────────────────────────────────
+A10, foundation, concrete           → Masonry
+B20, exterior, cladding             → General Repair
+B30, roof                           → Roofing
+B40, window, door                   → Windows/Doors
+C30, floor                          → Flooring
+D20, plumb, water, drain            → Plumbing
+D30, hvac, heat, cooling            → HVAC
+D50, electric, light                → Electrical
+
+================================================================================
+AUTOMATIC URGENCY MAPPING
+================================================================================
+
+Type of Work                        → Urgency
+─────────────────────────────────────────────────────────────────
+Emergency, Immediate                → Critical
+Major Repair, Replacement           → High
+Provision for Repair                → Medium
+Minor Repair, Maintenance           → Low
+
+================================================================================
+TEST RESULTS
+================================================================================
+
+✅ Total Rows: 39
+✅ Successfully Parsed: 39
+✅ Errors: 0
+✅ Success Rate: 100%
+
+Sample Jobs:
+1. Injection des fissures par l'extérieur
+   → Category: Masonry | Urgency: High | Budget: $2,750
+
+2. Réparation majeure plomberie
+   → Category: Plumbing | Urgency: High | Budget: $313.50
+
+3. Replacement of electrical components
+   → Category: Electrical | Urgency: High | Budget: $435
+
+All categorized correctly! ✨
+
+================================================================================
+FILES CREATED/MODIFIED
+================================================================================
+
+✅ src/utils/excelParser.js                 (Added parseMaintenanceExcel)
+✅ src/utils/maintenanceColumnMapping.js    (New mapping rules)
+✅ src/controllers/inspectionController.js  (Auto-detection logic)
+✅ MAINTENANCE_TEMPLATE_SUPPORT.md          (Full documentation)
+✅ test-maintenance-parser.js               (Test script)
+
+================================================================================
+NO CHANGES NEEDED TO YOUR EXCEL
+================================================================================
+
+✅ Keep your column headers as-is (in English)
+✅ Keep your data in French/English mix
+✅ Keep your Uniformat codes
+✅ Keep your formatting
+✅ It works perfectly as-is!
+
+================================================================================
+WHAT'S SUPPORTED
+================================================================================
+
+✅ French data (descriptions, titles)
+✅ English data (mixed in same file)
+✅ All Uniformat codes (A10, B20, D50, etc.)
+✅ Long descriptions (no truncation)
+✅ Budget amounts (any currency)
+✅ Date formats (Excel dates)
+✅ Empty rows (automatically skipped)
+✅ Missing columns (gracefully handled)
+
+================================================================================
+READY TO USE!
+================================================================================
+
+Your template is production-ready. No setup needed.
+Just upload and create jobs!
+
+Test Command:
+$ open http://localhost:8080/test-inspection-ui.html
+
+Documentation:
+$ open MAINTENANCE_TEMPLATE_SUPPORT.md
+
+================================================================================
+HAPPY BULK IMPORTING! 🎉
+================================================================================
