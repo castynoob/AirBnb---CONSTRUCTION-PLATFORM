@@ -3,6 +3,7 @@ import {
   register,
   login,
   verifyEmail,
+  verifyEmailFromLink,
   resendVerificationEmail,
   refreshAccessToken,
   logout,
@@ -37,6 +38,7 @@ router.post("/google-login", loginRateLimiter, googleLogin);
 
 // Email verification
 router.post("/verify-email", verifyEmail);
+router.get("/verify-email", verifyEmailFromLink); // GET endpoint for email links with redirect
 
 // Resend verification email with rate limiting
 router.post("/resend-verification", verificationEmailRateLimiter, resendVerificationEmail);

@@ -129,7 +129,7 @@ export const loginEmailRateLimiter = rateLimit({
  */
 export const registrationRateLimiter = rateLimit({
   keyGenerator: (req) => `ratelimit:register:${req.ip}`,
-  max: 3,
+  max: 30,
   windowMs: 60 * 60 * 1000, // 1 hour
   message: 'Too many registration attempts, please try again later',
 });

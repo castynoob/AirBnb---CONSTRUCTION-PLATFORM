@@ -11,6 +11,7 @@
   "author": "",
   "license": "ISC",
   "dependencies": {
+    "@sendgrid/mail": "^8.1.6",
     "@supabase/supabase-js": "^2.77.0",
     "axios": "^1.13.1",
     "bcryptjs": "^3.0.2",
