@@ -96,7 +96,7 @@ export const login = async (req, res) => {
   }
 };
 
-// 🆕 NEW: Verify Email
+// 🆕 NEW: Verify Email (POST - for API calls)
 export const verifyEmail = async (req, res) => {
   try {
     const { token } = req.body;
@@ -106,29 +106,64 @@ export const verifyEmail = async (req, res) => {
     }
 
     const result = await pool.query(
-      `UPDATE users 
-       SET email_verified = TRUE, 
-           verification_token = NULL, 
+      `UPDATE users
+       SET email_verified = TRUE,
+           verification_token = NULL,
            verification_token_expires = NULL
-       WHERE verification_token = $1 
+       WHERE verification_token = $1
          AND verification_token_expires > NOW()
        RETURNING id, email, first_name, last_name`,
       [token]
     );
 
     if (result.rows.length === 0) {
-      return res.status(400).json({ 
-        message: "Invalid or expired verification token" 
+      return res.status(400).json({
+        message: "Invalid or expired verification token"
       });
     }
 
-    res.json({ 
+    res.json({
       message: "Email verified successfully. You can now log in.",
       user: result.rows[0]
     });
   } catch (err) {
     console.error("❌ Email verification error:", err);
     res.status(500).json({ message: "Server error" });
+  }
+};
+
+// 🆕 NEW: Verify Email via Link (GET - for email links with redirect)
+export const verifyEmailFromLink = async (req, res) => {
+  try {
+    const { token } = req.query;
+
+    if (!token) {
+      // Redirect to frontend with error
+      return res.redirect(`${process.env.FRONTEND_URL}/?verification=failed&reason=missing_token`);
+    }
+
+    const result = await pool.query(
+      `UPDATE users
+       SET email_verified = TRUE,
+           verification_token = NULL,
+           verification_token_expires = NULL
+       WHERE verification_token = $1
+         AND verification_token_expires > NOW()
+       RETURNING id, email, first_name, last_name`,
+      [token]
+    );
+
+    if (result.rows.length === 0) {
+      // Redirect to frontend with error (expired or invalid token)
+      return res.redirect(`${process.env.FRONTEND_URL}/?verification=failed&reason=invalid_token`);
+    }
+
+    // Success - redirect to landing page with success message
+    res.redirect(`${process.env.FRONTEND_URL}/?verification=success`);
+  } catch (err) {
+    console.error("❌ Email verification error:", err);
+    // Redirect to frontend with error
+    res.redirect(`${process.env.FRONTEND_URL}/?verification=failed&reason=server_error`);
   }
 };
 
