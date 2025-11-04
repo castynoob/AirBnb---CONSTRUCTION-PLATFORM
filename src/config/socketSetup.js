@@ -78,7 +78,9 @@ const setupSocket = (server) => {
         }
 
         // 🔒 Check if sender can message receiver
+        console.log(`🔍 [Socket] Checking authorization: Sender ${socket.userId} → Receiver ${receiverId}`);
         const canMessage = await messageModel.canUserMessage(socket.userId, receiverId);
+        console.log(`🔐 [Socket] Authorization result: ${canMessage}`);
         if (!canMessage) {
           console.warn(`🚫 User ${socket.userId} not allowed to message ${receiverId}`);
           return socket.emit('error', { message: 'Not authorized to message this user' });

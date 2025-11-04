@@ -15,12 +15,13 @@ export const createBid = async ({ job_id, entrepreneur_id, amount, message }) =>
 // 🟡 Get all bids for a specific job (with entrepreneur info)
 export const getBidsByJobId = async (job_id) => {
   const result = await pool.query(
-    `SELECT 
-      b.id, b.job_id, b.entrepreneur_id, b.amount, b.message, b.status, 
+    `SELECT
+      b.id, b.job_id, b.entrepreneur_id, b.amount, b.message, b.status,
       b.created_at, b.updated_at,
-      ep.company_name, ep.license_number, ep.years_in_business, 
+      ep.company_name, ep.license_number, ep.years_in_business,
       ep.average_rating, ep.total_reviews, ep.specializations,
-      u.first_name, u.last_name, u.email
+      ep.user_id as entrepreneur_user_id,
+      u.id as user_id, u.first_name, u.last_name, u.email
      FROM bids b
      JOIN entrepreneur_profiles ep ON b.entrepreneur_id = ep.id
      JOIN users u ON ep.user_id = u.id
