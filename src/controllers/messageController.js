@@ -74,9 +74,12 @@ const messageController = {
       }
 
       // Check if sender can message receiver (ACCESS CONTROL)
+      console.log(`🔍 Checking authorization: Sender ${senderId} → Receiver ${receiverId}`);
       const canMessage = await messageModel.canUserMessage(senderId, receiverId);
-      
+      console.log(`🔐 Authorization result: ${canMessage}`);
+
       if (!canMessage) {
+        console.log(`❌ Authorization denied for ${senderId} → ${receiverId}`);
         return res.status(403).json({
           success: false,
           message: 'You are not authorized to message this user. Entrepreneurs can only message property managers after bid approval.'

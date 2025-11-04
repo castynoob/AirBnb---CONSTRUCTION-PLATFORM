@@ -53,7 +53,17 @@ export const getAllJobs = async () => {
 
 // 🔵 Get job by ID
 export const getJobById = async (id) => {
-  const result = await pool.query(`SELECT * FROM jobs WHERE id = $1`, [id]);
+  // ✅ JOIN with manager_profiles to get the user_id for messaging
+  const result = await pool.query(
+    `SELECT j.*,
+            mp.user_id as manager_user_id,
+            u.first_name || ' ' || u.last_name as manager_name
+     FROM jobs j
+     LEFT JOIN manager_profiles mp ON j.manager_id = mp.id
+     LEFT JOIN users u ON mp.user_id = u.id
+     WHERE j.id = $1`,
+    [id]
+  );
   return result.rows[0];
 };
 
