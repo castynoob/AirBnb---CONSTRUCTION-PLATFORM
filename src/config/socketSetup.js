@@ -13,9 +13,16 @@ let io = null;
  * Called from server.js
  */
 const setupSocket = (server) => {
+  // Allow multiple origins for Socket.io
+  const allowedOrigins = [
+    'http://localhost:3000',
+    'http://localhost:5173',
+    process.env.FRONTEND_URL,
+  ].filter(Boolean);
+
   io = new Server(server, {
     cors: {
-      origin: process.env.FRONTEND_URL || 'http://localhost:3000',
+      origin: allowedOrigins,
       methods: ['GET', 'POST'],
       credentials: true,
     },
