@@ -5,6 +5,11 @@ const messageModel = {
   // CREATE CONVERSATION
   // ============================================
   async createConversation(participant1Id, participant2Id, jobId = null) {
+    // Validate that participants are different users
+    if (participant1Id === participant2Id) {
+      throw new Error(`Cannot create conversation: both participants are the same user (${participant1Id})`);
+    }
+
     const query = `
       INSERT INTO conversations (participant1_id, participant2_id, job_id, last_message_at)
       VALUES ($1, $2, $3, NOW())
@@ -18,6 +23,11 @@ const messageModel = {
   // GET OR CREATE CONVERSATION
   // ============================================
   async getOrCreateConversation(userId1, userId2, jobId = null) {
+    // Validate that participants are different users
+    if (userId1 === userId2) {
+      throw new Error(`Cannot create conversation: both participants are the same user (${userId1})`);
+    }
+
     // Check if conversation exists (bidirectional)
     let query = `
       SELECT * FROM conversations
@@ -45,38 +55,83 @@ const messageModel = {
   // ============================================
   // GET USER CONVERSATIONS
   // ============================================
-  async getUserConversations(userId) {
-    const query = `
-      SELECT 
+  async getUserConversations(userId, userRole = null) {
+    // Build the query with optional role filtering and job/bid information
+    let query = `
+      SELECT
         c.*,
-        CASE 
+        CASE
           WHEN c.participant1_id = $1 THEN c.participant2_id
           ELSE c.participant1_id
         END as other_user_id,
         u.first_name || ' ' || u.last_name as other_user_name,
         u.role as other_user_role,
         (
-          SELECT content FROM messages 
-          WHERE conversation_id = c.id 
-          ORDER BY created_at DESC 
+          SELECT
+            CASE
+              WHEN content IS NOT NULL AND content != '' THEN content
+              WHEN image_url IS NOT NULL THEN '📷 Photo'
+              WHEN attachments IS NOT NULL THEN '📎 Attachment'
+              ELSE ''
+            END
+          FROM messages
+          WHERE conversation_id = c.id
+          ORDER BY created_at DESC
           LIMIT 1
         ) as last_message,
         (
           SELECT COUNT(*) FROM messages
-          WHERE conversation_id = c.id 
-            AND receiver_id = $1 
+          WHERE conversation_id = c.id
+            AND receiver_id = $1
             AND is_read = FALSE
-        ) as unread_count
+        ) as unread_count,
+        j.id as job_id,
+        j.title as job_title,
+        j.description as job_description,
+        j.category as job_category,
+        j.budget_min as job_budget_min,
+        j.budget_max as job_budget_max,
+        j.due_date as job_due_date,
+        j.urgency as job_urgency,
+        p.address as job_property_address,
+        p.city as job_city,
+        b.id as bid_id,
+        b.amount as bid_amount,
+        b.message as bid_message,
+        b.status as bid_status,
+        b.created_at as bid_created_at
       FROM conversations c
       LEFT JOIN users u ON (
-        CASE 
+        CASE
           WHEN c.participant1_id = $1 THEN c.participant2_id
           ELSE c.participant1_id
         END = u.id
       )
-      WHERE c.participant1_id = $1 OR c.participant2_id = $1
-      ORDER BY c.last_message_at DESC
+      LEFT JOIN jobs j ON c.job_id = j.id
+      LEFT JOIN properties p ON j.property_id = p.id
+      LEFT JOIN bids b ON b.job_id = j.id
+        AND b.status = 'approved'
+        AND (
+          (b.entrepreneur_id IN (SELECT id FROM entrepreneur_profiles WHERE user_id = $1))
+          OR (b.entrepreneur_id IN (
+            SELECT ep.id FROM entrepreneur_profiles ep
+            WHERE ep.user_id = (
+              CASE
+                WHEN c.participant1_id = $1 THEN c.participant2_id
+                ELSE c.participant1_id
+              END
+            )
+          ))
+        )
+      WHERE (c.participant1_id = $1 OR c.participant2_id = $1)
     `;
+
+    // Filter for property managers: only show residents and entrepreneurs
+    if (userRole === 'property_manager') {
+      query += ` AND u.role IN ('resident', 'entrepreneur')`;
+    }
+
+    query += ` ORDER BY c.last_message_at DESC`;
 
     const result = await pool.query(query, [userId]);
     return result.rows;
@@ -85,23 +140,25 @@ const messageModel = {
   // ============================================
   // SEND MESSAGE
   // ============================================
-  async sendMessage(conversationId, senderId, receiverId, content, jobId = null) {
+  async sendMessage(conversationId, senderId, receiverId, content, jobId = null, imageUrl = null, attachments = null) {
     const client = await pool.connect();
     try {
       await client.query('BEGIN');
 
       // Insert message
       const insertQuery = `
-        INSERT INTO messages (conversation_id, sender_id, receiver_id, content, job_id)
-        VALUES ($1, $2, $3, $4, $5)
+        INSERT INTO messages (conversation_id, sender_id, receiver_id, content, job_id, image_url, attachments)
+        VALUES ($1, $2, $3, $4, $5, $6, $7)
         RETURNING *
       `;
       const messageResult = await client.query(insertQuery, [
         conversationId,
         senderId,
         receiverId,
-        content,
-        jobId
+        content || '',
+        jobId,
+        imageUrl,
+        attachments ? JSON.stringify(attachments) : null
       ]);
 
       // Update conversation last_message_at
@@ -196,34 +253,45 @@ const messageModel = {
       SELECT id, role FROM users WHERE id IN ($1, $2)
     `;
     const userResult = await pool.query(userQuery, [senderId, receiverId]);
-    
+
     const sender = userResult.rows.find(u => u.id === senderId);
     const receiver = userResult.rows.find(u => u.id === receiverId);
 
-    if (!sender || !receiver) return false;
+    console.log(`[canUserMessage] Sender:`, sender);
+    console.log(`[canUserMessage] Receiver:`, receiver);
+
+    if (!sender || !receiver) {
+      console.log(`[canUserMessage] Missing user - sender: ${!!sender}, receiver: ${!!receiver}`);
+      return false;
+    }
 
     // RULE 1: Residents can always message property managers
     if (sender.role === 'resident' && receiver.role === 'property_manager') {
+      console.log('[canUserMessage] ✅ RULE 1 matched: Resident → Property Manager');
       return true;
     }
 
     // RULE 2: Property managers can always message residents
     if (sender.role === 'property_manager' && receiver.role === 'resident') {
+      console.log('[canUserMessage] ✅ RULE 2 matched: Property Manager → Resident');
       return true;
     }
 
     // RULE 3: Residents can message other residents
     if (sender.role === 'resident' && receiver.role === 'resident') {
+      console.log('[canUserMessage] ✅ RULE 3 matched: Resident → Resident');
       return true;
     }
 
     // RULE 4: Suppliers can message entrepreneurs
     if (sender.role === 'supplier' && receiver.role === 'entrepreneur') {
+      console.log('[canUserMessage] ✅ RULE 4 matched: Supplier → Entrepreneur');
       return true;
     }
 
     // RULE 5: Entrepreneurs can message suppliers
     if (sender.role === 'entrepreneur' && receiver.role === 'supplier') {
+      console.log('[canUserMessage] ✅ RULE 5 matched: Entrepreneur → Supplier');
       return true;
     }
 
@@ -233,27 +301,31 @@ const messageModel = {
         (sender.role === 'entrepreneur' && receiver.role === 'property_manager') ||
         (sender.role === 'property_manager' && receiver.role === 'entrepreneur')
         ) {
+        console.log('[canUserMessage] Checking RULE 6: Entrepreneur ↔ Property Manager (requires approved bid)');
         const entrepreneurId = sender.role === 'entrepreneur' ? senderId : receiverId;
         const managerId = sender.role === 'property_manager' ? senderId : receiverId;
 
         // Check for approved bids (FIXED - join through jobs table)
         const bidQuery = `
-            SELECT b.id 
+            SELECT b.id
             FROM bids b
             JOIN entrepreneur_profiles ep ON b.entrepreneur_id = ep.id
             JOIN jobs j ON b.job_id = j.id
             JOIN manager_profiles mp ON j.manager_id = mp.id
-            WHERE ep.user_id = $1 
-            AND mp.user_id = $2 
+            WHERE ep.user_id = $1
+            AND mp.user_id = $2
             AND b.status = 'approved'
             LIMIT 1
         `;
 
         const bidResult = await pool.query(bidQuery, [entrepreneurId, managerId]);
-        return bidResult.rows.length > 0;
+        const hasApprovedBid = bidResult.rows.length > 0;
+        console.log(`[canUserMessage] Approved bid check: ${hasApprovedBid ? '✅ Found' : '❌ Not found'}`);
+        return hasApprovedBid;
     }
 
     // Default: deny access
+    console.log(`[canUserMessage] ❌ No rules matched - ${sender.role} → ${receiver.role}`);
     return false;
   }
 };

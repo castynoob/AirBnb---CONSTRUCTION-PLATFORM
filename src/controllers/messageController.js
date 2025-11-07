@@ -7,7 +7,8 @@ const messageController = {
   async getConversations(req, res) {
     try {
       const userId = req.user.id;
-      const conversations = await messageModel.getUserConversations(userId);
+      const userRole = req.user.role;
+      const conversations = await messageModel.getUserConversations(userId, userRole);
 
       res.json({
         success: true,
@@ -31,10 +32,7 @@ const messageController = {
       const { limit = 50, offset = 0 } = req.query;
       const userId = req.user.id;
 
-      // Verify user is part of this conversation
-      const conversationQuery = await messageModel.getOrCreateConversation(userId, userId);
-      // This is a simplified check - you may want to verify conversation access more thoroughly
-
+      // Get messages (conversation access is verified by checking if user is sender or receiver)
       const messages = await messageModel.getConversationMessages(
         conversationId,
         parseInt(limit),
@@ -63,13 +61,13 @@ const messageController = {
   async sendMessage(req, res) {
     try {
       const senderId = req.user.id;
-      const { receiverId, content, jobId } = req.body;
+      const { receiverId, content, jobId, imageUrl, attachments } = req.body;
 
       // Validate input
-      if (!receiverId || !content) {
+      if (!receiverId || (!content && !imageUrl && (!attachments || attachments.length === 0))) {
         return res.status(400).json({
           success: false,
-          message: 'Receiver ID and content are required'
+          message: 'Receiver ID and content/image/attachments are required'
         });
       }
 
@@ -99,7 +97,9 @@ const messageController = {
         senderId,
         receiverId,
         content,
-        jobId
+        jobId,
+        imageUrl,
+        attachments
       );
 
       // Emit socket event for real-time delivery
@@ -279,6 +279,48 @@ const messageController = {
       res.status(500).json({
         success: false,
         message: 'Failed to check message access'
+      });
+    }
+  },
+
+  // Upload attachment for messages
+  uploadAttachment: async (req, res) => {
+    try {
+      if (!req.file) {
+        return res.status(400).json({
+          success: false,
+          message: 'No file provided'
+        });
+      }
+
+      const { uploadMessageFile, validateMessageFile } = await import('../utils/messageFileUpload.js');
+
+      // Validate file
+      const validation = validateMessageFile(req.file.size, req.file.mimetype);
+      if (!validation.valid) {
+        return res.status(400).json({
+          success: false,
+          message: validation.error
+        });
+      }
+
+      // Upload to Supabase
+      const fileData = await uploadMessageFile(
+        req.file.buffer,
+        req.file.originalname,
+        req.file.mimetype,
+        req.user.id
+      );
+
+      res.json({
+        success: true,
+        file: fileData
+      });
+    } catch (error) {
+      console.error('Upload attachment error:', error);
+      res.status(500).json({
+        success: false,
+        message: 'Failed to upload attachment'
       });
     }
   }

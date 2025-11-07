@@ -1,8 +1,17 @@
 import express from 'express';
+import multer from 'multer';
 import messageController from '../controllers/messageController.js';
 import { authenticateToken } from '../middleware/authMiddleware.js';  // ✅ CORRECT NAME
 
 const router = express.Router();
+
+// Configure multer for memory storage
+const upload = multer({
+  storage: multer.memoryStorage(),
+  limits: {
+    fileSize: 10 * 1024 * 1024, // 10MB limit
+  },
+});
 
 // ============================================
 // ALL ROUTES REQUIRE AUTHENTICATION
@@ -48,5 +57,10 @@ router.get('/unread-count', messageController.getUnreadCount);
 // CHECK IF USER CAN MESSAGE ANOTHER USER
 // ============================================
 router.get('/can-message/:otherUserId', messageController.checkMessageAccess);
+
+// ============================================
+// UPLOAD MESSAGE ATTACHMENT
+// ============================================
+router.post('/messages/upload-attachment', upload.single('file'), messageController.uploadAttachment);
 
 export default router;
