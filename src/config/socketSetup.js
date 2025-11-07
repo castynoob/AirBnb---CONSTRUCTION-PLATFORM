@@ -5,6 +5,8 @@
 import { Server } from 'socket.io';
 import jwt from 'jsonwebtoken';
 import messageModel from '../models/messageModel.js'; // ✅ your DB model
+import { sendMessageNotificationEmail } from '../config/emailConfig.js';
+import pool from '../config/db.js';
 
 let io = null;
 
@@ -57,13 +59,21 @@ const setupSocket = (server) => {
     // JOIN / LEAVE CONVERSATION
     // ============================================
     socket.on('join_conversation', (conversationId) => {
-      socket.join(conversationId.toString());
-      console.log(`👥 User ${socket.userId} joined conversation ${conversationId}`);
+      // Don't join if conversationId is null (new conversation not yet created)
+      if (conversationId) {
+        socket.join(conversationId.toString());
+        console.log(`👥 User ${socket.userId} joined conversation ${conversationId}`);
+      } else {
+        console.log(`⚠️ User ${socket.userId} attempted to join null conversation (new conversation)`);
+      }
     });
 
     socket.on('leave_conversation', (conversationId) => {
-      socket.leave(conversationId.toString());
-      console.log(`👋 User ${socket.userId} left conversation ${conversationId}`);
+      // Don't leave if conversationId is null
+      if (conversationId) {
+        socket.leave(conversationId.toString());
+        console.log(`👋 User ${socket.userId} left conversation ${conversationId}`);
+      }
     });
 
     // ============================================
@@ -71,67 +81,130 @@ const setupSocket = (server) => {
     // ============================================
     socket.on('send_message', async (data) => {
       try {
-        const { receiverId, content, conversationId, jobId = null } = data;
+        const { receiverId, content, conversationId, jobId = null, imageUrl = null, attachments = null } = data;
 
-        if (!receiverId || !content) {
-          return socket.emit('error', { message: 'Missing receiver or content' });
+        if (!receiverId || (!content && !imageUrl && (!attachments || attachments.length === 0))) {
+          return socket.emit('error', { message: 'Missing receiver or content/image/attachments' });
         }
 
         // 🔒 Check if sender can message receiver
-        console.log(`🔍 [Socket] Checking authorization: Sender ${socket.userId} → Receiver ${receiverId}`);
+        console.log(`🔍 [Socket] Checking authorization: Sender ${socket.userId} (role: ${socket.userRole}) → Receiver ${receiverId}`);
         const canMessage = await messageModel.canUserMessage(socket.userId, receiverId);
         console.log(`🔐 [Socket] Authorization result: ${canMessage}`);
         if (!canMessage) {
-          console.warn(`🚫 User ${socket.userId} not allowed to message ${receiverId}`);
-          return socket.emit('error', { message: 'Not authorized to message this user' });
+          console.warn(`🚫 User ${socket.userId} (role: ${socket.userRole}) not allowed to message ${receiverId}`);
+          return socket.emit('error', {
+            message: 'Not authorized to message this user',
+            details: 'Entrepreneurs need an approved bid to message property managers'
+          });
         }
 
-        // ✅ Create message
+        // 🆕 Get or create conversation if conversationId is null
+        let actualConversationId = conversationId;
+        if (!actualConversationId) {
+          console.log(`🆕 Creating new conversation between ${socket.userId} and ${receiverId}`);
+          const conversation = await messageModel.getOrCreateConversation(
+            socket.userId,
+            receiverId,
+            jobId
+          );
+          actualConversationId = conversation.id;
+          console.log(`✅ Conversation created/found: ${actualConversationId}`);
+
+          // Join sender to the new conversation room
+          socket.join(actualConversationId.toString());
+          console.log(`👥 User ${socket.userId} joined new conversation ${actualConversationId}`);
+        }
+
+        // ✅ Create message with actual conversation ID
         const message = await messageModel.sendMessage(
-          conversationId,
+          actualConversationId,
           socket.userId,
           receiverId,
           content,
-          jobId
+          jobId,
+          imageUrl,
+          attachments
         );
 
-        console.log(`💬 Message saved: ${socket.userId} → ${receiverId}`);
-        console.log(`📤 Emitting to conversation room: ${conversationId}`);
+        console.log(`💬 Message saved: ${socket.userId} → ${receiverId} (Conversation: ${actualConversationId})`);
+        console.log(`📤 Emitting to conversation room: ${actualConversationId}`);
 
         // ✅ FIX: Emit to CONVERSATION ROOM (both users receive it)
-        io.to(conversationId.toString()).emit('new_message', {
-          conversationId,
+        io.to(actualConversationId.toString()).emit('new_message', {
+          conversationId: actualConversationId,
           message: {
             id: message.id,
             content: message.content,
             sender_id: socket.userId,
             receiver_id: receiverId,
             created_at: message.created_at,
+            image_url: message.image_url,
+            attachments: message.attachments,
           },
         });
 
-        console.log(`✅ new_message event emitted to room ${conversationId}`);
+        console.log(`✅ new_message event emitted to room ${actualConversationId}`);
 
         // 📬 Also send confirmation to sender
         socket.emit('message_sent', {
-          conversationId,
+          conversationId: actualConversationId,
           message: {
             id: message.id,
+            conversation_id: actualConversationId,
             content: message.content,
             created_at: message.created_at,
+            image_url: message.image_url,
+            attachments: message.attachments,
           },
         });
 
+        // Get sender and receiver details for email notification
+        const senderResult = await pool.query(
+          'SELECT first_name, last_name FROM users WHERE id = $1',
+          [socket.userId]
+        );
+        const receiverResult = await pool.query(
+          'SELECT email, first_name, last_name FROM users WHERE id = $1',
+          [receiverId]
+        );
+
+        const senderName = senderResult.rows[0]
+          ? `${senderResult.rows[0].first_name} ${senderResult.rows[0].last_name}`
+          : 'Someone';
+
+        const receiverData = receiverResult.rows[0];
+
         // 🔔 Notify receiver's personal room for notifications (if they're not in the conversation)
         io.to(receiverId.toString()).emit('message_notification', {
-          conversationId,
+          conversationId: actualConversationId,
           senderId: socket.userId,
+          senderName,
+          content,
         });
+
+        // 📧 Send email notification (async, don't wait)
+        if (receiverData) {
+          const messagePreview = content.substring(0, 100) + (content.length > 100 ? '...' : '');
+          sendMessageNotificationEmail(
+            receiverData.email,
+            receiverData.first_name,
+            senderName,
+            messagePreview
+          ).catch(err => {
+            console.error('❌ Failed to send email notification:', err);
+          });
+        }
 
         console.log(`✅ Message delivery complete`);
       } catch (error) {
         console.error('❌ Error in send_message:', error);
-        socket.emit('error', { message: 'Failed to send message' });
+        console.error('❌ Error stack:', error.stack);
+        socket.emit('error', {
+          message: 'Failed to send message',
+          error: error.message,
+          details: process.env.NODE_ENV === 'development' ? error.stack : undefined
+        });
       }
     });
 

@@ -97,6 +97,7 @@ export const BUCKETS = {
   JOB_IMAGES: 'job-images',
   PROFILE_IMAGES: 'profile-images',
   PROPERTY_IMAGES: 'property-images',
+  MESSAGE_ATTACHMENTS: 'message-attachments',
 };
 
 /**
@@ -166,6 +167,24 @@ export const initializeSupabaseBuckets = async () => {
       public: true,
       fileSizeLimit: 5242880, // 5MB
       allowedMimeTypes: ['image/jpeg', 'image/png', 'image/webp'],
+    },
+    {
+      name: BUCKETS.MESSAGE_ATTACHMENTS,
+      public: true,
+      fileSizeLimit: 10485760, // 10MB
+      allowedMimeTypes: [
+        'image/jpeg',
+        'image/png',
+        'image/webp',
+        'image/gif',
+        'application/pdf',
+        'application/msword',
+        'application/vnd.openxmlformats-officedocument.wordprocessingml.document',
+        'application/vnd.ms-excel',
+        'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
+        'text/plain',
+        'application/zip',
+      ],
     },
   ];
 
