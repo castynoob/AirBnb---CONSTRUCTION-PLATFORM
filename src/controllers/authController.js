@@ -16,11 +16,14 @@ export const register = async (req, res) => {
 
     const existingUser = await findUserByEmail(email);
     if (existingUser) {
-      return res.status(400).json({ message: "Email already in use" });
+      return res.status(400).json({
+        message: "This email is already registered. Please use a different email or try logging in.",
+        field: "email"
+      });
     }
 
     const hashedPassword = await bcrypt.hash(password, 10);
-    
+
     // Generate verification token
     const verificationToken = crypto.randomBytes(32).toString('hex');
     const tokenExpires = new Date(Date.now() + 24 * 60 * 60 * 1000); // 24 hours
@@ -32,17 +35,18 @@ export const register = async (req, res) => {
       [email, hashedPassword, first_name, last_name, role, verificationToken, tokenExpires]
     );
 
-
-    
     // Send verification email
     await sendVerificationEmail(email, verificationToken);
 
-    res.status(201).json({ 
-      message: "User registered successfully. Please check your email to verify your account." 
+    res.status(201).json({
+      message: "Registration successful! Please check your email to verify your account.",
+      email: email
     });
   } catch (err) {
     console.error("❌ Register error:", err);
-    res.status(500).json({ message: "Server error" });
+    res.status(500).json({
+      message: "We're experiencing technical difficulties. Please try again later."
+    });
   }
 };
 
@@ -52,20 +56,23 @@ export const login = async (req, res) => {
     const { email, password } = req.body;
     const user = await findUserByEmail(email);
 
-    if (!user) {
-      return res.status(404).json({ message: "User not found" });
-    }
+    // Generic error message for security (don't reveal if email exists)
+    const invalidMessage = "Invalid email or password";
 
-    // Check if email is verified
-    if (!user.email_verified) {
-      return res.status(403).json({ 
-        message: "Please verify your email before logging in" 
-      });
+    if (!user) {
+      return res.status(401).json({ message: invalidMessage });
     }
 
     const isMatch = await bcrypt.compare(password, user.password);
     if (!isMatch) {
-      return res.status(401).json({ message: "Invalid credentials" });
+      return res.status(401).json({ message: invalidMessage });
+    }
+
+    // Check if email is verified (after password check for security)
+    if (!user.email_verified) {
+      return res.status(403).json({
+        message: "Please verify your email before logging in. Check your inbox for the verification link."
+      });
     }
 
     // Create short-lived access token (15 minutes)

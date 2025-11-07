@@ -1,0 +1,245 @@
+AUTHENTICATION ARCHITECTURE DIAGRAM
+
+================================================================================
+FRONTEND (React/Vite)
+================================================================================
+
+Landing Page (LandingPage.jsx)
+├─ Login Modal
+│  ├─ Email/Password Form
+│  ├─ Google OAuth Button
+│  └─ Forgot Password Link (placeholder)
+│
+├─ Register Modal (2-step)
+│  ├─ Step 1: Role Selection
+│  └─ Step 2: Form (role-specific)
+│
+└─ API Utility (api.js)
+   ├─ Token Storage (localStorage)
+   │  ├─ token (15 min JWT)
+   │  ├─ refreshToken (7 day)
+   │  ├─ userId
+   │  └─ userProfile (JSON)
+   │
+   ├─ Auto Token Refresh Logic
+   │  ├─ On 401: POST /api/auth/refresh-token
+   │  ├─ Update localStorage
+   │  └─ Retry request
+   │
+   └─ Protected Routes (ProtectedRoute.jsx)
+      └─ Check token validity before rendering
+
+================================================================================
+BACKEND (Node.js/Express)
+================================================================================
+
+Auth Routes (authRoutes.js)
+├─ POST /api/auth/login
+├─ POST /api/auth/google-login
+├─ POST /api/auth/register
+├─ POST /api/auth/verify-email
+├─ GET  /api/auth/verify-email
+├─ POST /api/auth/resend-verification
+├─ POST /api/auth/request-password-reset
+├─ POST /api/auth/reset-password
+├─ POST /api/auth/refresh-token
+├─ POST /api/auth/logout
+├─ GET  /api/auth/me
+└─ PUT  /api/auth/me
+
+Auth Controller (authController.js)
+├─ register()
+│  ├─ Hash password (bcryptjs)
+│  ├─ Generate verification_token (crypto)
+│  ├─ Store in users table
+│  └─ Send email via SendGrid
+│
+├─ login()
+│  ├─ Find user by email
+│  ├─ Check email_verified = true
+│  ├─ Compare password (bcryptjs)
+│  ├─ Generate JWT (15 min)
+│  ├─ Create refresh_token in DB
+│  └─ Return tokens + user data
+│
+├─ verifyEmail() & verifyEmailFromLink()
+│  ├─ Find user with verification_token
+│  ├─ Check token expiry (24 hours)
+│  ├─ Update email_verified = true
+│  └─ Clear verification_token
+│
+├─ requestPasswordReset()
+│  ├─ Find user by email
+│  ├─ Generate reset_token (crypto)
+│  ├─ Store with 1 hour expiry
+│  └─ Send email via SendGrid
+│
+├─ resetPassword()
+│  ├─ Validate reset_token & expiry
+│  ├─ Hash new password (bcryptjs)
+│  ├─ Update users table
+│  └─ Clear reset_token
+│
+├─ refreshAccessToken()
+│  ├─ Validate refresh_token in DB
+│  ├─ Generate new JWT (15 min)
+│  └─ Return new token
+│
+└─ logout()
+   └─ Delete refresh_token from DB
+
+================================================================================
+DATABASE (PostgreSQL)
+================================================================================
+
+users table
+├─ id (UUID, PK)
+├─ email (VARCHAR, UNIQUE)
+├─ password (TEXT - bcryptjs hash)
+├─ role (VARCHAR)
+├─ first_name, middle_name, last_name
+├─ phone
+├─ created_at, updated_at
+│
+├─ EMAIL VERIFICATION FIELDS
+│  ├─ email_verified (BOOLEAN, default: false)
+│  ├─ verification_token (TEXT - 64 chars)
+│  └─ verification_token_expires (TIMESTAMP - 24h)
+│
+├─ PASSWORD RESET FIELDS
+│  ├─ reset_token (TEXT - 64 chars)
+│  └─ reset_token_expires (TIMESTAMP - 1h)
+│
+└─ OAUTH FIELDS
+   ├─ provider ('local' or 'google')
+   ├─ provider_id (Google ID)
+   └─ stripe_customer_id
+
+refresh_tokens table
+├─ id (UUID, PK)
+├─ user_id (UUID, FK)
+├─ token (VARCHAR - 128 chars)
+├─ expires_at (TIMESTAMP - 7 days)
+└─ created_at
+
+================================================================================
+EMAIL SERVICE (SendGrid)
+================================================================================
+
+Email Config (emailConfig.js)
+├─ API Key: process.env.SENDGRID_API_KEY
+├─ From: process.env.EMAIL_FROM
+│
+├─ sendVerificationEmail()
+│  ├─ Template: Blue header + button link
+│  ├─ Link: /api/auth/verify-email?token=XXX
+│  ├─ Expiry: 24 hours
+│  └─ HTML + text fallback
+│
+└─ sendPasswordResetEmail()
+   ├─ Template: Blue header + button link
+   ├─ Link: /frontend-url/reset-password?token=XXX
+   ├─ Expiry: 1 hour
+   └─ HTML + text fallback
+
+================================================================================
+MIDDLEWARE
+================================================================================
+
+Rate Limiting (rateLimitMiddleware.js)
+├─ loginRateLimiter
+├─ loginEmailRateLimiter
+├─ registrationRateLimiter
+├─ passwordResetRateLimiter
+└─ verificationEmailRateLimiter
+
+Authentication (authMiddleware.js)
+├─ Extract JWT from Authorization header
+├─ Verify against JWT_SECRET
+├─ Attach user to request object
+└─ Return 401 if invalid
+
+Validation (validationMiddleware.js)
+├─ validateRegistration
+└─ validateLogin
+
+================================================================================
+TOKEN EXPIRY TIMELINE
+================================================================================
+
+Verification Token:        24 hours
+Reset Token:              1 hour
+JWT Access Token:         15 minutes
+Refresh Token:            7 days (stored in DB)
+
+================================================================================
+SECURITY FEATURES
+================================================================================
+
+✓ bcryptjs password hashing (10 rounds)
+✓ crypto.randomBytes(32) for tokens (64 char hex strings)
+✓ Tokens stored in database with expiry times
+✓ JWT secret in environment variables
+✓ Email verification required for login
+✓ Rate limiting on auth endpoints
+✓ No email enumeration (doesn't reveal if email exists)
+✓ OAuth support (Google)
+✓ Refresh tokens in DB (not localStorage)
+✓ Auto token refresh on 401
+
+================================================================================
+DATA FLOW: COMPLETE LOGIN SEQUENCE
+================================================================================
+
+1. USER REGISTRATION
+   Frontend: POST /api/register/{role}
+   Backend: Hash password, create user (email_verified=false)
+   Backend: Generate verification_token, store in DB
+   Backend: Send email with link: /api/auth/verify-email?token=XXX
+   User: Click link in email
+   Frontend: GET /api/auth/verify-email?token=XXX
+   Backend: Validate token & expiry, set email_verified=true
+   Backend: Redirect to landing page with success param
+
+2. USER LOGIN
+   Frontend: POST /api/auth/login (email, password)
+   Backend: Find user, check email_verified=true
+   Backend: Compare password hash
+   Backend: Create JWT (15 min): {id, email, role}
+   Backend: Create refresh_token in DB (7 days)
+   Backend: Return {accessToken, refreshToken, user}
+   Frontend: Store token, refreshToken in localStorage
+   Frontend: Navigate to /homepage/{role}
+
+3. PROTECTED API REQUEST
+   Frontend: GET /api/data (with Authorization: Bearer {token})
+   Backend: Extract & verify JWT
+   Backend: Process request
+   Backend: Return data
+
+4. TOKEN EXPIRATION HANDLING
+   Frontend: Receive 401 Unauthorized
+   Frontend: POST /api/auth/refresh-token (with refreshToken)
+   Backend: Find & validate refresh_token in DB
+   Backend: Generate new JWT (15 min)
+   Backend: Return {accessToken}
+   Frontend: Update localStorage token
+   Frontend: Retry original request with new token
+
+5. PASSWORD RESET
+   Frontend: POST /api/auth/request-password-reset (email)
+   Backend: Find user, generate reset_token (1 hour)
+   Backend: Send email with link: /reset-password?token=XXX
+   User: Click link, navigate to reset password page
+   Frontend: POST /api/auth/reset-password (token, newPassword)
+   Backend: Validate token & expiry
+   Backend: Hash new password, update DB
+   Backend: Clear reset_token
+   User: Login with new password
+
+6. LOGOUT
+   Frontend: POST /api/auth/logout (with refreshToken)
+   Backend: Delete refresh_token from DB
+   Frontend: Clear localStorage (token, refreshToken, userProfile)
+   Frontend: Redirect to landing page
+

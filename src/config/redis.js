@@ -22,6 +22,11 @@ const redisConfig = {
 
   // Connection options
   retryStrategy: (times) => {
+    // Stop retrying after 3 attempts if Redis is unavailable
+    if (times > 3) {
+      console.log('[Redis] ⚠ Redis unavailable - running without cache');
+      return null; // Stop retrying
+    }
     // Reconnect after exponential backoff
     const delay = Math.min(times * 50, 2000);
     console.log(`[Redis] Reconnecting attempt ${times}, delay: ${delay}ms`);
