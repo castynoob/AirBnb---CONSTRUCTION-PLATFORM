@@ -8,13 +8,16 @@ import {
 import { authenticateToken } from "../middleware/authMiddleware.js";
 import { cacheMiddleware, invalidateCache } from "../middleware/cacheMiddleware.js";
 import { REVIEW_KEYS, TTL } from "../utils/cacheKeys.js";
+import { uploadMultipleImages, handleUploadError } from "../middleware/uploadMiddleware.js";
 
 const router = express.Router();
 
-// Add review - Invalidate review caches
+// Add review - Invalidate review caches (with optional multiple images upload)
 router.post(
   "/",
   authenticateToken,
+  uploadMultipleImages, // Support multiple images upload (up to 5)
+  handleUploadError,
   invalidateCache((req) => {
     // Invalidate reviews for both reviewer and reviewed user
     const patterns = [REVIEW_KEYS.forUser(req.body.reviewer_id)];

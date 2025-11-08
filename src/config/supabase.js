@@ -8,6 +8,8 @@ import { createClient } from '@supabase/supabase-js';
  * - Job images
  * - Profile images (users, managers, entrepreneurs)
  * - Property images
+ * - Review images
+ * - Message attachments
  */
 
 // Helper function to get config values (lazy evaluation)
@@ -98,6 +100,7 @@ export const BUCKETS = {
   PROFILE_IMAGES: 'profile-images',
   PROPERTY_IMAGES: 'property-images',
   MESSAGE_ATTACHMENTS: 'message-attachments',
+  REVIEW_IMAGES: 'review-images',
 };
 
 /**
@@ -185,6 +188,12 @@ export const initializeSupabaseBuckets = async () => {
         'text/plain',
         'application/zip',
       ],
+    },
+    {
+      name: BUCKETS.REVIEW_IMAGES,
+      public: true,
+      fileSizeLimit: 5242880, // 5MB
+      allowedMimeTypes: ['image/jpeg', 'image/png', 'image/webp'],
     },
   ];
 
