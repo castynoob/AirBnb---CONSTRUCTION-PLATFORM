@@ -109,10 +109,11 @@ export const getJobsByEntrepreneurId = async (req, res) => {
 
     const result = await pool.query(
       `
-      SELECT *
-      FROM jobs
-      WHERE entrepreneur_id = $1
-      ORDER BY created_at DESC
+      SELECT j.*, mp.user_id as manager_user_id
+      FROM jobs j
+      LEFT JOIN manager_profiles mp ON j.manager_id::uuid = mp.id::uuid
+      WHERE j.entrepreneur_id = $1
+      ORDER BY j.created_at DESC
       `,
       [entrepreneur_id]
     );

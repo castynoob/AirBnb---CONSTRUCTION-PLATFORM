@@ -14,11 +14,23 @@ export const createReview = async (reviewer_id, reviewed_user_id, job_id, rating
 // Get reviews submitted by a user
 export const getReviewsByReviewer = async (reviewer_id) => {
   const result = await pool.query(
-    `SELECT r.*, j.title AS job_title, u.first_name AS reviewed_first_name, u.last_name AS reviewed_last_name
+    `SELECT r.*,
+            j.title AS job_title,
+            u.first_name AS reviewed_first_name,
+            u.last_name AS reviewed_last_name,
+            COALESCE(
+              json_agg(
+                json_build_object('id', i.id, 'image_url', i.image_url, 'created_at', i.created_at)
+                ORDER BY i.created_at
+              ) FILTER (WHERE i.id IS NOT NULL),
+              '[]'
+            ) as images
      FROM reviews r
      LEFT JOIN jobs j ON r.job_id = j.id
      LEFT JOIN users u ON r.reviewed_user_id = u.id
+     LEFT JOIN images i ON i.review_id = r.id
      WHERE r.reviewer_id = $1
+     GROUP BY r.id, j.title, u.first_name, u.last_name
      ORDER BY r.created_at DESC`,
     [reviewer_id]
   );
@@ -28,11 +40,23 @@ export const getReviewsByReviewer = async (reviewer_id) => {
 // Get reviews received by a user
 export const getReviewsByReviewedUser = async (reviewed_user_id) => {
   const result = await pool.query(
-    `SELECT r.*, j.title AS job_title, u.first_name AS reviewer_first_name, u.last_name AS reviewer_last_name
+    `SELECT r.*,
+            j.title AS job_title,
+            u.first_name AS reviewer_first_name,
+            u.last_name AS reviewer_last_name,
+            COALESCE(
+              json_agg(
+                json_build_object('id', i.id, 'image_url', i.image_url, 'created_at', i.created_at)
+                ORDER BY i.created_at
+              ) FILTER (WHERE i.id IS NOT NULL),
+              '[]'
+            ) as images
      FROM reviews r
      LEFT JOIN jobs j ON r.job_id = j.id
      LEFT JOIN users u ON r.reviewer_id = u.id
+     LEFT JOIN images i ON i.review_id = r.id
      WHERE r.reviewed_user_id = $1
+     GROUP BY r.id, j.title, u.first_name, u.last_name
      ORDER BY r.created_at DESC`,
     [reviewed_user_id]
   );
@@ -55,15 +79,24 @@ export const hasUserReviewedCompletedJob = async (reviewer_id, job_id) => {
 // Get review by job_id
 export const getReviewByJobId = async (job_id) => {
   const result = await pool.query(
-    `SELECT r.*, 
+    `SELECT r.*,
             u1.first_name AS reviewer_first_name,
             u1.last_name AS reviewer_last_name,
             u2.first_name AS reviewed_first_name,
-            u2.last_name AS reviewed_last_name
+            u2.last_name AS reviewed_last_name,
+            COALESCE(
+              json_agg(
+                json_build_object('id', i.id, 'image_url', i.image_url, 'created_at', i.created_at)
+                ORDER BY i.created_at
+              ) FILTER (WHERE i.id IS NOT NULL),
+              '[]'
+            ) as images
      FROM reviews r
      LEFT JOIN users u1 ON u1.id = r.reviewer_id
      LEFT JOIN users u2 ON u2.id = r.reviewed_user_id
-     WHERE r.job_id = $1`,
+     LEFT JOIN images i ON i.review_id = r.id
+     WHERE r.job_id = $1
+     GROUP BY r.id, u1.first_name, u1.last_name, u2.first_name, u2.last_name`,
     [job_id]
   );
 

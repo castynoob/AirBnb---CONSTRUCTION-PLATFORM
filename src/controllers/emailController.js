@@ -2,7 +2,7 @@ import nodemailer from "nodemailer";
 import pool from '../config/db.js'
 
 export const sendEmailToAllEntrepreneurs = async (req, res) => {
-  const { subject, message } = req.body;
+  const { subject, message, html } = req.body;
 
   try {
     // 1️⃣ Fetch all entrepreneur emails
@@ -29,12 +29,19 @@ export const sendEmailToAllEntrepreneurs = async (req, res) => {
 
     // 3️⃣ Send emails
     for (const e of entrepreneurs) {
-      await transporter.sendMail({
-        from: process.env.EMAIL_USER_URGENT,
+      const mailOptions = {
+        from: `Intervos Platform <${process.env.EMAIL_USER_URGENT}>`,
         to: e.email,
         subject,
         text: message,
-      });
+      };
+
+      // Add HTML content if provided
+      if (html) {
+        mailOptions.html = html;
+      }
+
+      await transporter.sendMail(mailOptions);
     }
 
     res.status(200).json({

@@ -41,7 +41,7 @@ export const getEntrepreneurProfile = async (req, res) => {
     }
 
     const entrepreneur = await pool.query(
-      `SELECT ep.*, u.email, u.first_name, u.last_name
+      `SELECT ep.*, u.email, u.first_name, u.last_name, u.phone
        FROM entrepreneur_profiles ep
        JOIN users u ON ep.user_id = u.id
        WHERE ep.user_id = $1`,
@@ -511,6 +511,122 @@ export const deleteEntrepreneurProfilePicture = async (req, res) => {
 
   } catch (error) {
     console.error('[Upload] Delete entrepreneur profile picture error:', error);
+    res.status(500).json({
+      message: 'Server error',
+      error: error.message
+    });
+  }
+};
+
+/**
+ * Update Entrepreneur Profile
+ * PUT /api/users/entrepreneur/profile
+ *
+ * Updates entrepreneur profile information
+ */
+export const updateEntrepreneurProfile = async (req, res) => {
+  try {
+    const userId = req.user.id;
+    const {
+      company_name,
+      license_number,
+      years_in_business,
+      num_employees,
+      address,
+      specializations
+    } = req.body;
+
+    // Validate required fields
+    if (!company_name || !license_number || !years_in_business || !num_employees || !address) {
+      return res.status(400).json({
+        message: 'Missing required fields',
+        required: ['company_name', 'license_number', 'years_in_business', 'num_employees', 'address']
+      });
+    }
+
+    // Check if entrepreneur profile exists
+    const entrepreneurCheck = await pool.query(
+      'SELECT id FROM entrepreneur_profiles WHERE user_id = $1',
+      [userId]
+    );
+
+    if (entrepreneurCheck.rows.length === 0) {
+      return res.status(404).json({
+        message: 'Entrepreneur profile not found'
+      });
+    }
+
+    // Update entrepreneur profile
+    const updateResult = await pool.query(
+      `UPDATE entrepreneur_profiles
+       SET company_name = $1,
+           license_number = $2,
+           years_in_business = $3,
+           num_employees = $4,
+           address = $5,
+           specializations = $6,
+           updated_at = NOW()
+       WHERE user_id = $7
+       RETURNING *`,
+      [
+        company_name,
+        license_number,
+        years_in_business,
+        num_employees,
+        address,
+        specializations || [],
+        userId
+      ]
+    );
+
+    console.log(`[Update] ✓ Entrepreneur profile updated: ${userId}`);
+
+    res.status(200).json({
+      message: 'Profile updated successfully',
+      profile: updateResult.rows[0]
+    });
+
+  } catch (error) {
+    console.error('[Update] Entrepreneur profile error:', error);
+    res.status(500).json({
+      message: 'Server error',
+      error: error.message
+    });
+  }
+};
+
+/**
+ * Update User Phone Number
+ * PUT /api/users/phone
+ *
+ * Updates user's phone number in users table
+ */
+export const updateUserPhone = async (req, res) => {
+  try {
+    const userId = req.user.id;
+    const { phone } = req.body;
+
+    if (!phone) {
+      return res.status(400).json({
+        message: 'Phone number is required'
+      });
+    }
+
+    // Update phone in users table
+    await pool.query(
+      'UPDATE users SET phone = $1 WHERE id = $2',
+      [phone, userId]
+    );
+
+    console.log(`[Update] ✓ User phone updated: ${userId}`);
+
+    res.status(200).json({
+      message: 'Phone number updated successfully',
+      phone: phone
+    });
+
+  } catch (error) {
+    console.error('[Update] User phone error:', error);
     res.status(500).json({
       message: 'Server error',
       error: error.message

@@ -5,21 +5,149 @@ import {
   hasUserReviewedCompletedJob,
   getReviewByJobId
 } from "../models/reviewModel.js";
+import pool from "../config/db.js";
+import { uploadToSupabase, deleteFromSupabase, getPublicUrl, extractFilePathFromUrl, generateUniqueFileName } from '../utils/supabaseHelpers.js';
+import { BUCKETS } from '../config/supabase.js';
 
 // POST /api/reviews
 export const addReview = async (req, res) => {
   try {
     const { reviewed_user_id, job_id, rating, comment } = req.body;
     const reviewer_id = req.user.id;
+    const files = req.files || [];
+
+    // Validate required fields
+    if (!reviewed_user_id || !job_id || !rating || !comment) {
+      return res.status(400).json({
+        message: "Missing required fields: reviewed_user_id, job_id, rating, and comment are required"
+      });
+    }
+
+    // Validate rating range
+    if (rating < 1 || rating > 5) {
+      return res.status(400).json({ message: "Rating must be between 1 and 5" });
+    }
+
+    // Verify the job exists and is completed
+    const jobCheck = await pool.query(
+      `SELECT j.id, j.status, j.manager_id, j.entrepreneur_id,
+              ep.user_id as entrepreneur_user_id,
+              mp.user_id as manager_user_id
+       FROM jobs j
+       LEFT JOIN entrepreneur_profiles ep ON j.entrepreneur_id::uuid = ep.id::uuid
+       LEFT JOIN manager_profiles mp ON j.manager_id::uuid = mp.id::uuid
+       WHERE j.id = $1::uuid`,
+      [job_id]
+    );
+
+    if (jobCheck.rows.length === 0) {
+      return res.status(404).json({ message: "Job not found" });
+    }
+
+    const job = jobCheck.rows[0];
+
+    // Debug logging
+    console.log('🔍 Review Authorization Debug:');
+    console.log('- Reviewer ID (from token):', reviewer_id, typeof reviewer_id);
+    console.log('- Job Manager Profile ID:', job.manager_id, typeof job.manager_id);
+    console.log('- Job Manager User ID:', job.manager_user_id, typeof job.manager_user_id);
+    console.log('- Job Entrepreneur User ID:', job.entrepreneur_user_id, typeof job.entrepreneur_user_id);
+    console.log('- Job Status:', job.status);
+
+    if (job.status !== 'completed') {
+      return res.status(400).json({
+        message: "You can only review completed jobs"
+      });
+    }
+
+    // Verify the reviewer is part of this job (either manager or entrepreneur)
+    // Convert both to strings for comparison to handle UUID type issues
+    const isManager = String(job.manager_user_id) === String(reviewer_id);
+    const isEntrepreneur = String(job.entrepreneur_user_id) === String(reviewer_id);
+
+    console.log('- Is Manager:', isManager);
+    console.log('- Is Entrepreneur:', isEntrepreneur);
+
+    if (!isManager && !isEntrepreneur) {
+      return res.status(403).json({
+        message: "You can only review jobs you're associated with",
+        debug: {
+          reviewer_id,
+          job_manager_user_id: job.manager_user_id,
+          job_entrepreneur_user_id: job.entrepreneur_user_id
+        }
+      });
+    }
+
+    // Verify reviewed_user_id is the other party in the job
+    const expectedReviewedUserId = isManager ? job.entrepreneur_user_id : job.manager_user_id;
+
+    console.log('- Expected Reviewed User ID:', expectedReviewedUserId);
+    console.log('- Received Reviewed User ID:', reviewed_user_id, typeof reviewed_user_id);
+
+    if (String(reviewed_user_id) !== String(expectedReviewedUserId)) {
+      return res.status(400).json({
+        message: "Invalid reviewed_user_id. You can only review the other party in this job.",
+        expected: expectedReviewedUserId,
+        received: reviewed_user_id
+      });
+    }
 
     // Check if user already reviewed this completed job
     const alreadyReviewed = await hasUserReviewedCompletedJob(reviewer_id, job_id);
     if (alreadyReviewed) {
-      return res.status(400).json({ message: "You already reviewed this job." });
+      return res.status(400).json({ message: "You have already reviewed this job" });
     }
 
+    // Create review without images first
     const review = await createReview(reviewer_id, reviewed_user_id, job_id, rating, comment);
-    res.status(201).json({ message: "Review created successfully", review });
+
+    // Upload images if any
+    const uploadedImages = [];
+    if (files.length > 0) {
+      for (const file of files) {
+        try {
+          // Generate unique filename
+          const uniqueFileName = generateUniqueFileName(file.originalname);
+          const filePath = `reviews/${review.id}/${uniqueFileName}`;
+
+          // Upload to Supabase
+          const uploadResult = await uploadToSupabase({
+            fileBuffer: file.buffer,
+            bucket: BUCKETS.REVIEW_IMAGES,
+            filePath: filePath,
+            contentType: file.mimetype,
+            upsert: false,
+          });
+
+          if (uploadResult.success) {
+            // Get public URL
+            const imageUrl = getPublicUrl(BUCKETS.REVIEW_IMAGES, uploadResult.data.path);
+
+            // Insert into images table with review_id
+            const imageResult = await pool.query(
+              `INSERT INTO images (review_id, image_url, uploaded_by, created_at)
+               VALUES ($1, $2, $3, NOW())
+               RETURNING *`,
+              [review.id, imageUrl, reviewer_id]
+            );
+
+            uploadedImages.push(imageResult.rows[0]);
+          }
+        } catch (uploadError) {
+          console.error("Error uploading review image:", uploadError);
+          // Continue with next image if one fails
+        }
+      }
+    }
+
+    res.status(201).json({
+      message: "Review created successfully",
+      review: {
+        ...review,
+        images: uploadedImages
+      }
+    });
   } catch (error) {
     console.error("Error adding review:", error);
     res.status(500).json({ message: "Internal server error" });
@@ -53,17 +181,24 @@ export const getReviewsReceived = async (req, res) => {
 export const getReviewByJob = async (req, res) => {
   try {
     const { job_id } = req.params;
+    const reviewer_id = req.user.id; // Get current user ID from token
 
     if (!job_id) {
       return res.status(400).json({ message: "Job ID is required" });
     }
 
-    const review = await getReviewByJobId(job_id);
+    // Get all reviews for this job
+    const allReviews = await getReviewByJobId(job_id);
+
+    // Filter to only get the review written by the current user
+    const userReview = allReviews.filter(review => String(review.reviewer_id) === String(reviewer_id));
+
+    console.log(`📝 Get Review: Job ${job_id} - User ${reviewer_id} - Found: ${userReview.length} review(s)`);
 
     // ✅ Instead of 404, just return an empty array with 200 OK
     return res.status(200).json({
-      review,
-      message: review.length > 0 ? "Review found" : "No review found for this job",
+      review: userReview,
+      message: userReview.length > 0 ? "Review found" : "No review found for this job",
     });
   } catch (error) {
     console.error("Error getting review by job:", error);

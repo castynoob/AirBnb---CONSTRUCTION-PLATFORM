@@ -13,7 +13,9 @@ import {
   uploadManagerProfilePicture,
   uploadEntrepreneurProfilePicture,
   deleteManagerProfilePicture,
-  deleteEntrepreneurProfilePicture
+  deleteEntrepreneurProfilePicture,
+  updateEntrepreneurProfile,
+  updateUserPhone
 } from "../controllers/userController.js";
 import { uploadImage, handleUploadError } from "../middleware/uploadMiddleware.js";
 import { authorizeRoles } from "../middleware/roleMiddleware.js";
@@ -115,6 +117,27 @@ router.delete(
   authorizeRoles("entrepreneur"),
   invalidateCache((req) => [USER_KEYS.profile(req.user.id), USER_KEYS.entrepreneur(req.user.id)]),
   deleteEntrepreneurProfilePicture
+);
+
+// ========================================
+// 📝 PROFILE UPDATE ROUTES
+// ========================================
+
+// Update Entrepreneur Profile
+router.put(
+  "/entrepreneur/profile",
+  authenticateToken,
+  authorizeRoles("entrepreneur"),
+  invalidateCache((req) => [USER_KEYS.profile(req.user.id), USER_KEYS.entrepreneur(req.user.id)]),
+  updateEntrepreneurProfile
+);
+
+// Update User Phone Number
+router.put(
+  "/phone",
+  authenticateToken,
+  invalidateCache((req) => [USER_KEYS.profile(req.user.id), USER_KEYS.entrepreneur(req.user.id)]),
+  updateUserPhone
 );
 
 export default router;
