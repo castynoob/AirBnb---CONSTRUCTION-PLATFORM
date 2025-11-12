@@ -37,6 +37,9 @@ import chatRoutes from "./src/routes/chatRoutes.js";
 import emailRoutes from "./src/routes/emailRoutes.js"
 import registrationRoutes from "./src/routes/registrationRoutes.js";
 import inspectionRoutes from "./src/routes/inspectionRoutes.js";
+import supplierRoutes from "./src/routes/supplierRoutes.js";
+import favoriteRoutes from "./src/routes/favoriteRoutes.js";
+import debugRoutes from "./src/routes/debugRoutes.js";
 
 // ============================================
 // SOCKET SETUP
@@ -152,6 +155,9 @@ app.use("/api/reviews", reviewRoutes);
 app.use("/api/chats", chatRoutes);
 app.use("/api/email", emailRoutes);
 app.use("/api/inspections", inspectionRoutes);
+app.use("/api", supplierRoutes);
+app.use("/api", favoriteRoutes);
+app.use("/api", debugRoutes); // DEBUG - Remove in production
 
 // ============================================
 // HEALTH CHECK
