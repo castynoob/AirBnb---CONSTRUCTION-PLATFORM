@@ -14,6 +14,7 @@ const FILE_SIZE_LIMITS = {
   IMAGE: 5 * 1024 * 1024, // 5MB
   EXCEL: 10 * 1024 * 1024, // 10MB
   PDF: 10 * 1024 * 1024, // 10MB
+  CATALOG: 50 * 1024 * 1024, // 50MB for supplier catalogs
 };
 
 // Allowed MIME types
@@ -112,6 +113,20 @@ export const uploadPDF = multer({
 }).single('file');
 
 /**
+ * Catalog PDF upload middleware (for suppliers)
+ * Accepts: PDF
+ * Max size: 50MB
+ * Single file
+ */
+export const uploadCatalog = multer({
+  storage,
+  limits: {
+    fileSize: FILE_SIZE_LIMITS.CATALOG,
+  },
+  fileFilter: createFileFilter(ALLOWED_MIME_TYPES.PDF),
+}).single('catalog');
+
+/**
  * Generic file upload middleware (any file type)
  * Use with caution - validate file types in controller
  * Max size: 10MB
@@ -122,6 +137,20 @@ export const uploadAny = multer({
     fileSize: FILE_SIZE_LIMITS.EXCEL,
   },
 }).single('file');
+
+/**
+ * Request file upload middleware (for supplier material requests)
+ * Accepts: PDF
+ * Max size: 10MB
+ * Single file with field name 'request_file'
+ */
+export const uploadRequestFile = multer({
+  storage,
+  limits: {
+    fileSize: FILE_SIZE_LIMITS.PDF,
+  },
+  fileFilter: createFileFilter(ALLOWED_MIME_TYPES.PDF),
+}).single('request_file');
 
 /**
  * Multer error handler middleware
@@ -268,7 +297,9 @@ export default {
   uploadMultipleImages,
   uploadExcel,
   uploadPDF,
+  uploadCatalog,
   uploadAny,
+  uploadRequestFile,
   handleUploadError,
   validateFileExists,
   validateFileType,

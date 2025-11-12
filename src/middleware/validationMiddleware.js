@@ -1,7 +1,7 @@
 import { body, validationResult } from "express-validator";
 
-// Password validation regex
-const PASSWORD_REGEX = /^(?=.*[a-z])(?=.*[A-Z])(?=.*\d)(?=.*[@$!%*?&#^()_\-+={}[\]:;"'<>,.?/\\|`~])[A-Za-z\d@$!%*?&#^()_\-+={}[\]:;"'<>,.?/\\|`~]{8,}$/;
+// Password validation regex - Simplified: min 8 chars, at least one lowercase and one number
+const PASSWORD_REGEX = /^(?=.*[a-z])(?=.*\d).{8,}$/;
 
 // Name validation regex (letters, spaces, hyphens, apostrophes only)
 const NAME_REGEX = /^[A-Za-zÀ-ÿ\s'\-]{2,50}$/;
@@ -9,7 +9,7 @@ const NAME_REGEX = /^[A-Za-zÀ-ÿ\s'\-]{2,50}$/;
 // Custom password validator
 const validatePasswordStrength = (value) => {
   if (!PASSWORD_REGEX.test(value)) {
-    throw new Error('Password must contain at least 8 characters, including uppercase, lowercase, number, and special character');
+    throw new Error('Password must contain at least 8 characters, including a lowercase letter and a number');
   }
   return true;
 };
