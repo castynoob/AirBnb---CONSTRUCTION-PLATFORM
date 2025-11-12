@@ -101,6 +101,7 @@ export const BUCKETS = {
   PROPERTY_IMAGES: 'property-images',
   MESSAGE_ATTACHMENTS: 'message-attachments',
   REVIEW_IMAGES: 'review-images',
+  DOCUMENTS: 'documents', // For supplier request PDFs and other documents
 };
 
 /**
@@ -194,6 +195,12 @@ export const initializeSupabaseBuckets = async () => {
       public: true,
       fileSizeLimit: 5242880, // 5MB
       allowedMimeTypes: ['image/jpeg', 'image/png', 'image/webp'],
+    },
+    {
+      name: BUCKETS.DOCUMENTS,
+      public: true,
+      fileSizeLimit: 10485760, // 10MB
+      allowedMimeTypes: ['application/pdf'],
     },
   ];
 
