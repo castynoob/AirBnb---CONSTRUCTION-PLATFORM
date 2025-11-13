@@ -2,7 +2,6 @@ import { body, validationResult } from "express-validator";
 
 // Password validation regex - Simplified: min 8 chars, at least one lowercase and one number
 const PASSWORD_REGEX = /^(?=.*[a-z])(?=.*\d).{8,}$/;
-
 // Name validation regex (letters, spaces, hyphens, apostrophes only)
 const NAME_REGEX = /^[A-Za-zÀ-ÿ\s'\-]{2,50}$/;
 
@@ -23,7 +22,7 @@ const validateName = (value) => {
 };
 
 export const validateRegistration = [
-  // Email validation
+  // Email validation (always required)
   body("email")
     .trim()
     .isEmail()
@@ -32,8 +31,9 @@ export const validateRegistration = [
     .isLength({ max: 255 })
     .withMessage("Email is too long"),
 
-  // Password validation with strength requirements
+  // Password validation - ONLY for local registration
   body("password")
+    .if((value, { req }) => req.body.provider === "local" || !req.body.provider)
     .isLength({ min: 8, max: 128 })
     .withMessage("Password must be between 8 and 128 characters")
     .custom(validatePasswordStrength),
@@ -44,7 +44,7 @@ export const validateRegistration = [
     .notEmpty()
     .withMessage("First name is required")
     .custom(validateName)
-    .escape(), // Prevent XSS
+    .escape(),
 
   // Last name validation
   body("last_name")
@@ -52,12 +52,28 @@ export const validateRegistration = [
     .notEmpty()
     .withMessage("Last name is required")
     .custom(validateName)
-    .escape(), // Prevent XSS
+    .escape(),
 
-  // Role validation
-  body("role")
-    .isIn(["entrepreneur", "property_manager", "resident", "supplier"])
-    .withMessage("Please select a valid role"),
+  // Phone validation (optional but recommended)
+  body("phone")
+    .optional()
+    .trim()
+    .notEmpty()
+    .withMessage("Phone is required")
+    .matches(/^[\d\s\-\+\(\)]+$/)
+    .withMessage("Please enter a valid phone number"),
+
+  // Provider validation - optional, defaults to "local"
+  body("provider")
+    .optional()
+    .isIn(["local", "google", "facebook"])
+    .withMessage("Please select a valid provider"),
+
+  // Provider ID validation - required for social logins
+  body("provider_id")
+    .if((value, { req }) => req.body.provider === "google" || req.body.provider === "facebook")
+    .notEmpty()
+    .withMessage("Provider ID is required for social login"),
 
   // Error handler middleware
   (req, res, next) => {
@@ -68,7 +84,6 @@ export const validateRegistration = [
         acc[error.path] = error.msg;
         return acc;
       }, {});
-
       return res.status(400).json({
         message: "Please check your input and try again",
         errors: formattedErrors
