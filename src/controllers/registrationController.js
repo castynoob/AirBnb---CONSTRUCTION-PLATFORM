@@ -311,8 +311,6 @@ export const registerSupplier = async (req, res) => {
     res.status(500).json({ message: "Server error" });
   }
 };
-<<<<<<< HEAD
-=======
 
 // 🟢 Register Resident
 export const registerResident = async (req, res) => {
@@ -431,4 +429,3 @@ export const registerResident = async (req, res) => {
     res.status(500).json({ message: "Server error" });
   }
 };
->>>>>>> origin/141125
