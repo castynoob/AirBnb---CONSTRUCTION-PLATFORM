@@ -40,6 +40,11 @@ import inspectionRoutes from "./src/routes/inspectionRoutes.js";
 import supplierRoutes from "./src/routes/supplierRoutes.js";
 import favoriteRoutes from "./src/routes/favoriteRoutes.js";
 import debugRoutes from "./src/routes/debugRoutes.js";
+<<<<<<< HEAD
+=======
+import residentRoutes from "./src/routes/residentRoutes.js";
+import groupChatRoutes from "./src/routes/groupChatRoutes.js";
+>>>>>>> origin/141125
 
 // ============================================
 // SOCKET SETUP
@@ -158,6 +163,11 @@ app.use("/api/inspections", inspectionRoutes);
 app.use("/api", supplierRoutes);
 app.use("/api", favoriteRoutes);
 app.use("/api", debugRoutes); // DEBUG - Remove in production
+<<<<<<< HEAD
+=======
+app.use("/api/residents", residentRoutes);
+app.use("/api/group-chats", groupChatRoutes);
+>>>>>>> origin/141125
 
 // ============================================
 // HEALTH CHECK
