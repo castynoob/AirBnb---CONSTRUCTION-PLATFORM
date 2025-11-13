@@ -17,6 +17,8 @@ import {
 import { uploadImage, handleUploadError } from "../middleware/uploadMiddleware.js";
 
 const router = express.Router();
+// Public endpoint for registration - no auth required
+router.get("/public", cacheMiddleware(PROPERTY_KEYS.all, TTL.TEN_MINUTES), getAllProperties);
 
 // All properties - CACHED (10 minutes)
 router.get("/all", verifyToken, cacheMiddleware(PROPERTY_KEYS.all, TTL.TEN_MINUTES), getAllProperties);

@@ -311,3 +311,121 @@ export const registerSupplier = async (req, res) => {
     res.status(500).json({ message: "Server error" });
   }
 };
+
+// 🟢 Register Resident
+export const registerResident = async (req, res) => {
+  const {
+    email,
+    password,
+    first_name,
+    last_name,
+    phone,
+    property_id,
+    property_name,  // NEW: Free text input for building name
+    unit_number,
+    floor,
+    building_section,
+    move_in_date,
+    provider = "local",
+    provider_id = null,
+  } = req.body;
+
+  try {
+    // Check if email already exists
+    const existingUser = await pool.query(
+      "SELECT id FROM users WHERE email = $1",
+      [email]
+    );
+    if (existingUser.rows.length > 0) {
+      return res.status(400).json({ message: "Email already registered" });
+    }
+
+    // Handle password logic
+    let hashedPassword = null;
+    if (provider === "local") {
+      if (!password) {
+        return res
+          .status(400)
+          .json({ message: "Password is required for local registration" });
+      }
+      hashedPassword = await bcrypt.hash(password, 10);
+    }
+
+    // Insert new user
+    const userResult = await pool.query(
+      `INSERT INTO users (email, password, first_name, last_name, role, provider, provider_id, email_verified, phone)
+       VALUES ($1, $2, $3, $4, 'resident', $5, $6, $7, $8)
+       RETURNING id, email, role, first_name, last_name, provider, provider_id`,
+      [
+        email,
+        hashedPassword,
+        first_name,
+        last_name,
+        provider,
+        provider_id,
+        provider !== "local",
+        phone
+      ]
+    );
+
+    const userId = userResult.rows[0].id;
+
+    // Get building_name from the selected property if property_id is provided
+    let building_name = property_name || null;
+    if (property_id) {
+      const propertyQuery = await pool.query(
+        'SELECT building_name FROM properties WHERE id = $1',
+        [property_id]
+      );
+      if (propertyQuery.rows.length > 0 && propertyQuery.rows[0].building_name) {
+        building_name = propertyQuery.rows[0].building_name;
+      }
+    }
+
+    // Insert resident profile
+    const profileResult = await pool.query(
+      `INSERT INTO resident_profiles (
+         user_id, property_id, property_name, building_name, unit_number, floor, building_section, move_in_date
+       )
+       VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
+       RETURNING *`,
+      [
+        userId,
+        property_id || null,
+        property_name || null,  // Save the user's text input for building name
+        building_name,  // Use the building_name from property or property_name
+        unit_number || null,
+        floor || null,
+        building_section || null,
+        move_in_date || null
+      ]
+    );
+
+    // Automatically add resident to building group chat
+    if (building_name) {
+      try {
+        console.log(`➕ Adding resident to building group chat: ${building_name}`);
+
+        // Get or create the building group chat
+        const groupChat = await groupChatModel.getOrCreateBuildingGroupChat(building_name, userId);
+        console.log(`✅ Group chat found/created: ${groupChat.name} (ID: ${groupChat.id})`);
+
+        // Add the new resident as a member
+        await groupChatModel.addMember(groupChat.id, userId, false);
+        console.log(`✅ Resident ${userId} added to group chat ${groupChat.id}`);
+      } catch (groupChatError) {
+        console.error('⚠️ Error adding resident to group chat:', groupChatError.message);
+        // Don't fail registration if group chat addition fails
+      }
+    }
+
+    res.status(201).json({
+      message: "Resident registered successfully",
+      user: userResult.rows[0],
+      profile: profileResult.rows[0],
+    });
+  } catch (error) {
+    console.error("Error registering resident:", error);
+    res.status(500).json({ message: "Server error" });
+  }
+};
