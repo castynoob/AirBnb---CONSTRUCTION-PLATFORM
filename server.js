@@ -161,7 +161,7 @@ app.use("/api", supplierRoutes);
 app.use("/api", favoriteRoutes);
 app.use("/api", debugRoutes); // DEBUG - Remove in production
 app.use("/api/residents", residentRoutes);
-app.use("/api/group-chats", groupChatRoutes);
+app.use("/api/residents/group-chats", groupChatRoutes);
 
 // ============================================
 // HEALTH CHECK
