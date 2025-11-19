@@ -2,6 +2,7 @@ import pool from "../config/db.js";
 import bcrypt from "bcryptjs";
 import crypto from "crypto";
 import { sendVerificationEmail } from "../config/emailConfig.js";
+import groupChatModel from "../models/groupChatModel.js";
 
 // 🟢 Register Entrepreneur
 export const registerEntrepreneur = async (req, res) => {
@@ -331,6 +332,25 @@ export const registerResident = async (req, res) => {
   } = req.body;
 
   try {
+    // Validate required fields
+    if (!email || !first_name || !last_name || !phone) {
+      return res.status(400).json({
+        message: "Missing required fields: email, first_name, last_name, and phone are required"
+      });
+    }
+
+    if (!property_id && !property_name) {
+      return res.status(400).json({
+        message: "Property information is required. Please provide either property_id or property_name"
+      });
+    }
+
+    if (!unit_number) {
+      return res.status(400).json({
+        message: "Unit number is required"
+      });
+    }
+
     // Check if email already exists
     const existingUser = await pool.query(
       "SELECT id FROM users WHERE email = $1",
@@ -351,10 +371,18 @@ export const registerResident = async (req, res) => {
       hashedPassword = await bcrypt.hash(password, 10);
     }
 
+    // Generate verification token for local registrations
+    let verificationToken = null;
+    let tokenExpires = null;
+    if (provider === "local") {
+      verificationToken = crypto.randomBytes(32).toString('hex');
+      tokenExpires = new Date(Date.now() + 24 * 60 * 60 * 1000); // 24 hours
+    }
+
     // Insert new user
     const userResult = await pool.query(
-      `INSERT INTO users (email, password, first_name, last_name, role, provider, provider_id, email_verified, phone)
-       VALUES ($1, $2, $3, $4, 'resident', $5, $6, $7, $8)
+      `INSERT INTO users (email, password, first_name, last_name, role, provider, provider_id, email_verified, phone, verification_token, verification_token_expires)
+       VALUES ($1, $2, $3, $4, 'resident', $5, $6, $7, $8, $9, $10)
        RETURNING id, email, role, first_name, last_name, provider, provider_id`,
       [
         email,
@@ -364,7 +392,9 @@ export const registerResident = async (req, res) => {
         provider,
         provider_id,
         provider !== "local",
-        phone
+        phone,
+        verificationToken,
+        tokenExpires
       ]
     );
 
@@ -419,8 +449,15 @@ export const registerResident = async (req, res) => {
       }
     }
 
+    // Send verification email for local registrations
+    if (provider === "local" && verificationToken) {
+      await sendVerificationEmail(email, verificationToken);
+    }
+
     res.status(201).json({
-      message: "Resident registered successfully",
+      message: provider === "local"
+        ? "Resident registered successfully. Please check your email to verify your account."
+        : "Resident registered successfully",
       user: userResult.rows[0],
       profile: profileResult.rows[0],
     });
