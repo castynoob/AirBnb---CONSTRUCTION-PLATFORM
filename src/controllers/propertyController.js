@@ -3,6 +3,7 @@ import pool from "../config/db.js";
 import * as Property from "../models/propertyModel.js";
 import { uploadToSupabase, deleteFromSupabase, getPublicUrl, extractFilePathFromUrl, generateUniqueFileName } from '../utils/supabaseHelpers.js';
 import { BUCKETS } from '../config/supabase.js';
+import { validateUUID } from '../utils/validation.js';
 
 // 🟢 Create a new property (Manager only)
 export const createProperty = async (req, res) => {
@@ -100,6 +101,21 @@ export const getPropertyById = async (req, res) => {
   try {
     const { id } = req.params;
 
+    // Validate ID parameter
+    if (!id || id === 'null' || id === 'undefined') {
+      return res.status(400).json({
+        message: "Invalid property ID"
+      });
+    }
+
+    // Validate UUID format
+    const uuidRegex = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+    if (!uuidRegex.test(id)) {
+      return res.status(400).json({
+        message: "Invalid property ID format"
+      });
+    }
+
     // Get property
     const property = await Property.getPropertyById(id);
 
@@ -142,6 +158,21 @@ export const updateProperty = async (req, res) => {
   try {
     const { id } = req.params;
     const updateFields = req.body;
+
+    // Validate ID parameter
+    if (!id || id === 'null' || id === 'undefined') {
+      return res.status(400).json({
+        message: "Invalid property ID"
+      });
+    }
+
+    // Validate UUID format
+    const uuidRegex = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+    if (!uuidRegex.test(id)) {
+      return res.status(400).json({
+        message: "Invalid property ID format"
+      });
+    }
 
     // Get property
     const property = await Property.getPropertyById(id);
@@ -192,6 +223,21 @@ export const updateProperty = async (req, res) => {
 export const deleteProperty = async (req, res) => {
   try {
     const { id } = req.params;
+
+    // Validate ID parameter
+    if (!id || id === 'null' || id === 'undefined') {
+      return res.status(400).json({
+        message: "Invalid property ID"
+      });
+    }
+
+    // Validate UUID format
+    const uuidRegex = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+    if (!uuidRegex.test(id)) {
+      return res.status(400).json({
+        message: "Invalid property ID format"
+      });
+    }
 
     // Get property
     const property = await Property.getPropertyById(id);
@@ -270,6 +316,21 @@ export const uploadPropertyImage = async (req, res) => {
   try {
     const { id } = req.params;
     const userId = req.user.id;
+
+    // Validate ID parameter
+    if (!id || id === 'null' || id === 'undefined') {
+      return res.status(400).json({
+        message: "Invalid property ID"
+      });
+    }
+
+    // Validate UUID format
+    const uuidRegex = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+    if (!uuidRegex.test(id)) {
+      return res.status(400).json({
+        message: "Invalid property ID format"
+      });
+    }
 
     // Validate file exists
     if (!req.file) {
@@ -370,6 +431,21 @@ export const deletePropertyImage = async (req, res) => {
   try {
     const { id } = req.params;
     const userId = req.user.id;
+
+    // Validate ID parameter
+    if (!id || id === 'null' || id === 'undefined') {
+      return res.status(400).json({
+        message: "Invalid property ID"
+      });
+    }
+
+    // Validate UUID format
+    const uuidRegex = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+    if (!uuidRegex.test(id)) {
+      return res.status(400).json({
+        message: "Invalid property ID format"
+      });
+    }
 
     // Get property
     const property = await Property.getPropertyById(id);

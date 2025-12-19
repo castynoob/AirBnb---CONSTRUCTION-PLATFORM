@@ -92,21 +92,33 @@ export const registerEntrepreneur = async (req, res) => {
       ]
     );
 
-    // Send verification email for local registrations
+    // Send verification email for local registrations (non-blocking)
+    let emailSent = false;
     if (provider === "local" && verificationToken) {
-      await sendVerificationEmail(email, verificationToken);
+      try {
+        await sendVerificationEmail(email, verificationToken);
+        emailSent = true;
+        console.log(`✅ Verification email sent to ${email}`);
+      } catch (emailError) {
+        console.error("❌ Failed to send verification email:", emailError);
+        // Don't block registration if email fails
+        emailSent = false;
+      }
     }
 
     res.status(201).json({
       message: provider === "local"
-        ? "Entrepreneur registered successfully. Please check your email to verify your account."
+        ? emailSent
+          ? "Entrepreneur registered successfully. Please check your email to verify your account."
+          : "Entrepreneur registered successfully. Verification email will be sent shortly."
         : "Entrepreneur registered successfully",
       user: userResult.rows[0],
       profile: profileResult.rows[0],
+      emailSent,
     });
   } catch (error) {
     console.error("Error registering entrepreneur:", error);
-    res.status(500).json({ message: "Server error" });
+    res.status(500).json({ message: "Server error", error: error.message });
   }
 };
 
@@ -178,21 +190,33 @@ export const registerManager = async (req, res) => {
       [userId, company_name, address]
     );
 
-    // Send verification email for local registrations
+    // Send verification email for local registrations (non-blocking)
+    let emailSent = false;
     if (provider === "local" && verificationToken) {
-      await sendVerificationEmail(email, verificationToken);
+      try {
+        await sendVerificationEmail(email, verificationToken);
+        emailSent = true;
+        console.log(`✅ Verification email sent to ${email}`);
+      } catch (emailError) {
+        console.error("❌ Failed to send verification email:", emailError);
+        // Don't block registration if email fails
+        emailSent = false;
+      }
     }
 
     res.status(201).json({
       message: provider === "local"
-        ? "Property manager registered successfully. Please check your email to verify your account."
+        ? emailSent
+          ? "Property manager registered successfully. Please check your email to verify your account."
+          : "Property manager registered successfully. Verification email will be sent shortly."
         : "Property manager registered successfully",
       user: userResult.rows[0],
       profile: profileResult.rows[0],
+      emailSent,
     });
   } catch (error) {
     console.error("Error registering manager:", error);
-    res.status(500).json({ message: "Server error" });
+    res.status(500).json({ message: "Server error", error: error.message });
   }
 };
 
@@ -295,21 +319,33 @@ export const registerSupplier = async (req, res) => {
       ]
     );
 
-    // Send verification email for local registrations
+    // Send verification email for local registrations (non-blocking)
+    let emailSent = false;
     if (provider === "local" && verificationToken) {
-      await sendVerificationEmail(email, verificationToken);
+      try {
+        await sendVerificationEmail(email, verificationToken);
+        emailSent = true;
+        console.log(`✅ Verification email sent to ${email}`);
+      } catch (emailError) {
+        console.error("❌ Failed to send verification email:", emailError);
+        // Don't block registration if email fails
+        emailSent = false;
+      }
     }
 
     res.status(201).json({
       message: provider === "local"
-        ? "Supplier registered successfully. Please check your email to verify your account."
+        ? emailSent
+          ? "Supplier registered successfully. Please check your email to verify your account."
+          : "Supplier registered successfully. Verification email will be sent shortly."
         : "Supplier registered successfully",
       user: userResult.rows[0],
       profile: profileResult.rows[0],
+      emailSent,
     });
   } catch (error) {
     console.error("Error registering supplier:", error);
-    res.status(500).json({ message: "Server error" });
+    res.status(500).json({ message: "Server error", error: error.message });
   }
 };
 
@@ -449,20 +485,32 @@ export const registerResident = async (req, res) => {
       }
     }
 
-    // Send verification email for local registrations
+    // Send verification email for local registrations (non-blocking)
+    let emailSent = false;
     if (provider === "local" && verificationToken) {
-      await sendVerificationEmail(email, verificationToken);
+      try {
+        await sendVerificationEmail(email, verificationToken);
+        emailSent = true;
+        console.log(`✅ Verification email sent to ${email}`);
+      } catch (emailError) {
+        console.error("❌ Failed to send verification email:", emailError);
+        // Don't block registration if email fails
+        emailSent = false;
+      }
     }
 
     res.status(201).json({
       message: provider === "local"
-        ? "Resident registered successfully. Please check your email to verify your account."
+        ? emailSent
+          ? "Resident registered successfully. Please check your email to verify your account."
+          : "Resident registered successfully. Verification email will be sent shortly."
         : "Resident registered successfully",
       user: userResult.rows[0],
       profile: profileResult.rows[0],
+      emailSent,
     });
   } catch (error) {
     console.error("Error registering resident:", error);
-    res.status(500).json({ message: "Server error" });
+    res.status(500).json({ message: "Server error", error: error.message });
   }
 };
