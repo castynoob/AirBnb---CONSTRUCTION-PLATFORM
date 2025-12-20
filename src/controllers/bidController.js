@@ -206,16 +206,21 @@ export const approveBid = async (req, res) => {
     );
 
     if (!job.rows[0]) {
-      return res.status(403).json({ 
-        message: "You can only approve bids for your own jobs" 
+      return res.status(403).json({
+        message: "You can only approve bids for your own jobs"
       });
     }
 
     const updatedBid = await Bid.updateBidStatus(id, "approved");
 
-    res.json({ 
-      message: "Bid approved successfully! Messaging is now unlocked.", 
-      bid: updatedBid 
+    // Decline all other pending bids for this job
+    const declinedBids = await Bid.declineOtherBids(bid.job_id, id);
+    console.log(`📋 Declined ${declinedBids.length} other bid(s) for job ${bid.job_id}`);
+
+    res.json({
+      message: "Bid approved successfully! Messaging is now unlocked.",
+      bid: updatedBid,
+      declined_bids: declinedBids.length
     });
 
   } catch (err) {
