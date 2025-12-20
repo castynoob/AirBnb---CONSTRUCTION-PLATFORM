@@ -22,9 +22,30 @@ const setupSocket = (server) => {
     process.env.FRONTEND_URL,
   ].filter(Boolean);
 
+  console.log('🔧 Socket.IO allowed origins:', allowedOrigins);
+
   io = new Server(server, {
     cors: {
-      origin: allowedOrigins,
+      origin: (origin, callback) => {
+        // Allow requests with no origin (mobile apps, Postman, etc.)
+        if (!origin) {
+          console.log('✅ Socket.IO: Allowing request with no origin');
+          return callback(null, true);
+        }
+
+        // Remove trailing slash for comparison
+        const normalizedOrigin = origin.replace(/\/$/, '');
+        const normalizedAllowed = allowedOrigins.map(o => o.replace(/\/$/, ''));
+
+        if (normalizedAllowed.includes(normalizedOrigin)) {
+          console.log(`✅ Socket.IO: Allowing origin: ${origin}`);
+          callback(null, true);
+        } else {
+          console.error(`❌ Socket.IO CORS blocked: ${origin}`);
+          console.error(`   Allowed origins:`, allowedOrigins);
+          callback(new Error(`Not allowed by CORS: ${origin}`));
+        }
+      },
       methods: ['GET', 'POST'],
       credentials: true,
     },
