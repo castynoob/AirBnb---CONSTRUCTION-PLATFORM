@@ -101,10 +101,24 @@ export const addToFavorites = async (manager_id, entrepreneur_id, job_id) => {
 // ⭐ Remove from favorites
 export const removeFromFavorites = async (manager_id, entrepreneur_id, job_id) => {
   await pool.query(
-    `DELETE FROM favorites 
-     WHERE manager_id = $1 
-     AND entrepreneur_id = $2 
+    `DELETE FROM favorites
+     WHERE manager_id = $1
+     AND entrepreneur_id = $2
      AND job_id = $3`,
     [manager_id, entrepreneur_id, job_id]
   );
+};
+
+// 🔴 Decline all other pending bids for a job (when one is approved)
+export const declineOtherBids = async (job_id, approved_bid_id) => {
+  const result = await pool.query(
+    `UPDATE bids
+     SET status = 'declined', updated_at = NOW()
+     WHERE job_id = $1
+     AND id != $2
+     AND status = 'pending'
+     RETURNING *`,
+    [job_id, approved_bid_id]
+  );
+  return result.rows;
 };
