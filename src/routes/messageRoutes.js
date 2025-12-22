@@ -63,4 +63,11 @@ router.get('/can-message/:otherUserId', messageController.checkMessageAccess);
 // ============================================
 router.post('/messages/upload-attachment', upload.single('file'), messageController.uploadAttachment);
 
+// ============================================
+// DIRECT MESSAGES (for property manager to access direct_messages table)
+// ============================================
+router.get('/direct-messages', messageController.getDirectMessageConversations);
+router.get('/direct-messages/:recipientId/messages', messageController.getDirectMessages);
+router.post('/direct-messages/:recipientId', messageController.sendDirectMessage);
+
 export default router;

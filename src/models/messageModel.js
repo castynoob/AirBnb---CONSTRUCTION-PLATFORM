@@ -28,24 +28,32 @@ const messageModel = {
       throw new Error(`Cannot create conversation: both participants are the same user (${userId1})`);
     }
 
-    // Check if conversation exists (bidirectional)
-    let query = `
+    // Check if conversation exists between these two users (ignore job_id to prevent duplicates)
+    const query = `
       SELECT * FROM conversations
       WHERE (participant1_id = $1 AND participant2_id = $2)
          OR (participant1_id = $2 AND participant2_id = $1)
+      ORDER BY last_message_at DESC
+      LIMIT 1
     `;
     const params = [userId1, userId2];
 
-    if (jobId) {
-      query += ` AND job_id = $3`;
-      params.push(jobId);
-    }
-
     let result = await pool.query(query, params);
 
-    // If conversation exists, return it
+    // If conversation exists, update job_id if provided and return it
     if (result.rows.length > 0) {
-      return result.rows[0];
+      const existingConv = result.rows[0];
+
+      // Optionally update job_id if a new one is provided and current is null
+      if (jobId && !existingConv.job_id) {
+        await pool.query(
+          `UPDATE conversations SET job_id = $1 WHERE id = $2`,
+          [jobId, existingConv.id]
+        );
+        existingConv.job_id = jobId;
+      }
+
+      return existingConv;
     }
 
     // Otherwise, create new conversation
@@ -133,7 +141,28 @@ const messageModel = {
 
     query += ` ORDER BY c.last_message_at DESC`;
 
+    console.log(`🔍 getUserConversations - userId: ${userId}, userRole: ${userRole}`);
+
+    // Debug: Check all conversations for this user
+    const debugQuery = await pool.query(
+      `SELECT c.id, c.participant1_id, c.participant2_id, c.last_message_at,
+              u1.role as p1_role, u2.role as p2_role
+       FROM conversations c
+       LEFT JOIN users u1 ON c.participant1_id = u1.id
+       LEFT JOIN users u2 ON c.participant2_id = u2.id
+       WHERE c.participant1_id = $1 OR c.participant2_id = $1`,
+      [userId]
+    );
+    console.log(`🔍 Debug - All conversations for user ${userId}:`, debugQuery.rows);
+
     const result = await pool.query(query, [userId]);
+    console.log(`🔍 getUserConversations - found ${result.rows.length} filtered conversations`);
+    if (result.rows.length > 0) {
+      result.rows.forEach(r => {
+        console.log(`  - Conv ${r.id}: with ${r.other_user_name} (${r.other_user_role})`);
+      });
+    }
+
     return result.rows;
   },
 

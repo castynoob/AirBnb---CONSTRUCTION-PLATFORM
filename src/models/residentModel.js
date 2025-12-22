@@ -11,7 +11,8 @@ const residentModel = {
   async getOrCreateProfile(userId) {
     const checkQuery = `
       SELECT rp.*, u.email, u.first_name, u.last_name, u.phone,
-             p.building_name, p.address
+             p.building_name, p.address,
+             COALESCE(rp.property_name, p.building_name) as resolved_building_name
       FROM resident_profiles rp
       JOIN users u ON rp.user_id = u.id
       LEFT JOIN properties p ON rp.property_id = p.id
@@ -256,11 +257,28 @@ const residentModel = {
 
   /**
    * Get building residents by property_name (user's text input)
+   * Matches residents who have the same property_name OR are linked to a property with the same building_name
+   * Also includes the property owner marked with is_owner flag
    */
   async getBuildingResidentsByName(propertyName, options = {}) {
-    const { search, status, floor, sortBy } = options;
-
-    let query = `
+    // Query to get residents and property owner in one result
+    // Using UNION to combine residents and owner
+    // The property_owner CTE finds the owner by matching building_name, address,
+    // or through residents linked to a property with property_id
+    const baseQuery = `
+      WITH property_owner AS (
+        SELECT DISTINCT
+          p.manager_id as user_id,
+          p.id as property_id
+        FROM properties p
+        WHERE p.building_name = $1
+           OR p.address = $1
+           OR p.id IN (
+             SELECT rp.property_id FROM resident_profiles rp
+             WHERE rp.property_name = $1 AND rp.property_id IS NOT NULL
+           )
+        LIMIT 1
+      )
       SELECT
         rp.user_id,
         u.first_name,
@@ -283,52 +301,255 @@ const residentModel = {
         rp.show_phone,
         rp.show_unit,
         rp.show_move_in_date,
-        rp.show_online_status
+        rp.show_online_status,
+        false as is_owner
       FROM resident_profiles rp
       JOIN users u ON rp.user_id = u.id
-      WHERE rp.property_name = $1
+      LEFT JOIN properties p ON rp.property_id = p.id
+      WHERE (rp.property_name = $1 OR p.building_name = $1)
+
+      UNION
+
+      SELECT
+        u.id as user_id,
+        u.first_name,
+        u.last_name,
+        u.email,
+        u.phone,
+        'Owner' as unit_number,
+        NULL as floor,
+        NULL as building_section,
+        NULL as move_in_date,
+        'Property Owner' as bio,
+        NULL as profile_picture,
+        false as is_online,
+        NULL as last_seen,
+        true as allow_messages,
+        true as contact_via_email,
+        true as contact_via_phone,
+        true as contact_via_message,
+        true as show_email,
+        true as show_phone,
+        true as show_unit,
+        false as show_move_in_date,
+        false as show_online_status,
+        true as is_owner
+      FROM users u
+      JOIN property_owner po ON u.id = po.user_id
+      WHERE NOT EXISTS (
+        SELECT 1 FROM resident_profiles rp2
+        LEFT JOIN properties p2 ON rp2.property_id = p2.id
+        WHERE rp2.user_id = u.id
+        AND (rp2.property_name = $1 OR p2.building_name = $1)
+      )
     `;
 
     const params = [propertyName];
     let paramCount = 1;
 
+    // Build WHERE clause for filters
+    const filters = [];
+
     // Add search filter
-    if (search) {
+    if (options.search) {
       paramCount++;
-      query += ` AND (
-        u.first_name ILIKE $${paramCount} OR
-        u.last_name ILIKE $${paramCount} OR
-        rp.unit_number ILIKE $${paramCount}
-      )`;
-      params.push(`%${search}%`);
+      filters.push(`(
+        first_name ILIKE $${paramCount} OR
+        last_name ILIKE $${paramCount} OR
+        unit_number ILIKE $${paramCount}
+      )`);
+      params.push(`%${options.search}%`);
     }
 
     // Add online status filter
-    if (status === 'online') {
-      query += ` AND rp.is_online = true`;
-    } else if (status === 'offline') {
-      query += ` AND rp.is_online = false`;
+    if (options.status === 'online') {
+      filters.push(`is_online = true`);
+    } else if (options.status === 'offline') {
+      filters.push(`is_online = false`);
     }
 
     // Add floor filter
-    if (floor) {
+    if (options.floor) {
       paramCount++;
-      query += ` AND rp.floor = $${paramCount}`;
-      params.push(floor);
+      filters.push(`floor = $${paramCount}`);
+      params.push(options.floor);
     }
 
-    // Add sorting
-    if (sortBy === 'name') {
-      query += ` ORDER BY u.first_name, u.last_name`;
-    } else if (sortBy === 'unit') {
-      query += ` ORDER BY rp.unit_number`;
-    } else if (sortBy === 'recently_active') {
-      query += ` ORDER BY rp.last_seen DESC NULLS LAST`;
-    } else {
-      query += ` ORDER BY u.first_name, u.last_name`;
+    // Build final query with filters
+    let query = `SELECT * FROM (${baseQuery}) AS combined_results`;
+
+    if (filters.length > 0) {
+      query += ` WHERE ${filters.join(' AND ')}`;
     }
+
+    // Add sorting - owner first, then by specified sort or name
+    if (options.sortBy === 'unit') {
+      query += ` ORDER BY is_owner DESC, unit_number`;
+    } else if (options.sortBy === 'recently_active') {
+      query += ` ORDER BY is_owner DESC, last_seen DESC NULLS LAST`;
+    } else {
+      query += ` ORDER BY is_owner DESC, first_name, last_name`;
+    }
+
+    console.log(`🔍 getBuildingResidentsByName query for: "${propertyName}", propertyId: ${options.propertyId}`);
+
+    // Debug: Check if property exists - use propertyId if available, otherwise match by name
+    let debugQuery;
+    if (options.propertyId) {
+      debugQuery = await pool.query(
+        `SELECT id, building_name, address, manager_id FROM properties WHERE id = $1`,
+        [options.propertyId]
+      );
+    } else {
+      debugQuery = await pool.query(
+        `SELECT id, building_name, address, manager_id FROM properties WHERE building_name = $1 OR address = $1`,
+        [propertyName]
+      );
+    }
+    console.log(`🔍 Debug - Properties found:`, debugQuery.rows);
 
     const result = await pool.query(query, params);
+    console.log(`🔍 Query returned ${result.rows.length} rows, owner count: ${result.rows.filter(r => r.is_owner).length}`);
+
+    // ALWAYS check and add property owner if not already in results
+    const ownerCount = result.rows.filter(r => r.is_owner).length;
+    console.log(`🔍 Owner count in results: ${ownerCount}`);
+
+    if (ownerCount === 0) {
+      // Try to find the property and its manager
+      let propertyWithManager = null;
+
+      if (debugQuery.rows.length > 0 && debugQuery.rows[0].manager_id) {
+        propertyWithManager = debugQuery.rows[0];
+      }
+
+      // If still no property found, try additional lookups
+      if (!propertyWithManager && options.propertyId) {
+        const directLookup = await pool.query(
+          `SELECT id, building_name, address, manager_id FROM properties WHERE id = $1`,
+          [options.propertyId]
+        );
+        if (directLookup.rows.length > 0 && directLookup.rows[0].manager_id) {
+          propertyWithManager = directLookup.rows[0];
+        }
+      }
+
+      if (propertyWithManager && propertyWithManager.manager_id) {
+        const managerId = propertyWithManager.manager_id;
+        console.log(`🔍 Adding owner manually: manager_id=${managerId} from property ${propertyWithManager.id}`);
+
+        // properties.manager_id references manager_profiles.id, so we need to join through manager_profiles
+        let ownerQuery = await pool.query(
+          `SELECT u.id as user_id, u.first_name, u.last_name, u.email, u.phone
+           FROM users u
+           INNER JOIN manager_profiles mp ON mp.user_id = u.id
+           WHERE mp.id = $1`,
+          [managerId]
+        );
+        console.log(`🔍 Owner query (via manager_profiles) returned ${ownerQuery.rows.length} rows:`, ownerQuery.rows);
+
+        // If manager not found by manager_profiles.id, the manager_id in properties table is stale/invalid
+        if (ownerQuery.rows.length === 0) {
+          console.log(`⚠️ Manager profile with ID ${managerId} not found!`);
+          console.log(`⚠️ The manager_id in properties table may be stale. Trying to find a valid property_manager...`);
+
+          // Try to find a property manager for this specific building
+          let fallbackQuery = await pool.query(
+            `SELECT u.id as user_id, u.first_name, u.last_name, u.email, u.phone
+             FROM users u
+             INNER JOIN manager_profiles mp ON mp.user_id = u.id
+             INNER JOIN properties p ON p.manager_id = mp.id
+             WHERE u.role = 'property_manager'
+               AND (p.building_name = $1 OR p.id = $2)
+             LIMIT 1`,
+            [propertyName, options.propertyId || propertyWithManager.id]
+          );
+
+          // If no manager found for this building, try finding any manager with manager_profile
+          if (fallbackQuery.rows.length === 0) {
+            console.log(`🔍 No property_manager found for this building, trying any manager with profile...`);
+            fallbackQuery = await pool.query(
+              `SELECT u.id as user_id, u.first_name, u.last_name, u.email, u.phone
+               FROM users u
+               INNER JOIN manager_profiles mp ON mp.user_id = u.id
+               WHERE u.role = 'property_manager'
+               LIMIT 1`
+            );
+          }
+
+          // If still no property manager with manager_profile, try without the join
+          if (fallbackQuery.rows.length === 0) {
+            console.log(`🔍 No property_manager with manager_profile found, trying without join...`);
+            fallbackQuery = await pool.query(
+              `SELECT id as user_id, first_name, last_name, email, phone
+               FROM users WHERE role = 'property_manager' LIMIT 1`
+            );
+          }
+          console.log(`🔍 Property manager fallback query returned ${fallbackQuery.rows.length} rows:`, fallbackQuery.rows);
+
+          if (fallbackQuery.rows.length > 0) {
+            ownerQuery = fallbackQuery;
+          }
+        }
+
+        if (ownerQuery.rows.length > 0) {
+          const owner = ownerQuery.rows[0];
+          console.log(`🔍 Owner data:`, owner);
+
+          // Check if this user is already in results (maybe without is_owner flag)
+          const alreadyExists = result.rows.some(r => r.user_id === owner.user_id);
+
+          if (!alreadyExists) {
+            const ownerEntry = {
+              user_id: owner.user_id,
+              first_name: owner.first_name,
+              last_name: owner.last_name,
+              email: owner.email,
+              phone: owner.phone,
+              unit_number: 'Owner',
+              floor: null,
+              building_section: null,
+              move_in_date: null,
+              bio: 'Property Manager',
+              profile_picture: null,
+              is_online: false,
+              last_seen: null,
+              allow_messages: true,
+              contact_via_email: true,
+              contact_via_phone: true,
+              contact_via_message: true,
+              show_email: true,
+              show_phone: true,
+              show_unit: true,
+              show_move_in_date: false,
+              show_online_status: false,
+              is_owner: true
+            };
+            console.log(`🔍 About to add owner entry:`, ownerEntry);
+            result.rows.unshift(ownerEntry);
+            console.log(`✅ Added owner ${owner.first_name} ${owner.last_name} to results. New length: ${result.rows.length}, first row is_owner: ${result.rows[0].is_owner}`);
+          } else {
+            console.log(`⚠️ Owner ${owner.first_name} ${owner.last_name} already in results but without is_owner flag`);
+            // Mark the existing entry as owner
+            const existingIndex = result.rows.findIndex(r => r.user_id === owner.user_id);
+            if (existingIndex !== -1) {
+              result.rows[existingIndex].is_owner = true;
+              result.rows[existingIndex].bio = 'Property Manager';
+              // Move to front
+              const [ownerEntry] = result.rows.splice(existingIndex, 1);
+              result.rows.unshift(ownerEntry);
+              console.log(`✅ Marked existing entry as owner and moved to front`);
+            }
+          }
+        }
+      } else {
+        console.log(`⚠️ No property with manager found for building: ${propertyName}`);
+      }
+    }
+
+    if (result.rows.length > 0) {
+      console.log(`🔍 Sample row:`, JSON.stringify(result.rows[0], null, 2));
+    }
     return result.rows;
   },
 
@@ -355,8 +576,11 @@ const residentModel = {
         rp.contact_via_email,
         rp.contact_via_phone,
         rp.contact_via_message,
+        rp.property_id,
+        rp.property_name,
         COALESCE(rp.property_name, p.building_name) as building_name,
-        p.address
+        p.address,
+        p.manager_id as property_manager_id
       FROM resident_profiles rp
       JOIN users u ON rp.user_id = u.id
       LEFT JOIN properties p ON rp.property_id = p.id
@@ -477,8 +701,72 @@ const residentModel = {
 
   /**
    * Get or create building group chat
+   * Automatically adds the property owner as an admin member
    */
   async getOrCreateBuildingChat(propertyId, createdById) {
+    // Helper function to find valid property manager
+    const findValidPropertyManager = async (managerId, propId) => {
+      console.log(`🔍 findValidPropertyManager called with managerId: ${managerId}, propertyId: ${propId}`);
+
+      // First try the manager_id from properties table
+      // Note: properties.manager_id references manager_profiles.id, so we need to join
+      if (managerId) {
+        const directQuery = await pool.query(
+          `SELECT u.id as user_id
+           FROM users u
+           INNER JOIN manager_profiles mp ON mp.user_id = u.id
+           WHERE mp.id = $1`,
+          [managerId]
+        );
+        if (directQuery.rows.length > 0) {
+          console.log(`✅ Found manager ${directQuery.rows[0].user_id} via manager_profiles.id ${managerId}`);
+          return directQuery.rows[0].user_id;
+        }
+        console.log(`⚠️ Manager profile ${managerId} not found for group chat`);
+      }
+
+      // Second: Try to find manager via manager_profiles for THIS specific property
+      if (propId) {
+        const specificQuery = await pool.query(
+          `SELECT u.id as user_id
+           FROM users u
+           INNER JOIN manager_profiles mp ON mp.user_id = u.id
+           INNER JOIN properties p ON p.manager_id = mp.id
+           WHERE u.role = 'property_manager' AND p.id = $1
+           LIMIT 1`,
+          [propId]
+        );
+        if (specificQuery.rows.length > 0) {
+          console.log(`✅ Found manager for this property: ${specificQuery.rows[0].user_id}`);
+          return specificQuery.rows[0].user_id;
+        }
+      }
+
+      // Fallback: find any property manager (try with manager_profiles first, then without)
+      let fallbackQuery = await pool.query(
+        `SELECT u.id as user_id
+         FROM users u
+         INNER JOIN manager_profiles mp ON mp.user_id = u.id
+         WHERE u.role = 'property_manager'
+         LIMIT 1`
+      );
+
+      if (fallbackQuery.rows.length === 0) {
+        console.log(`🔍 No property_manager with manager_profile found, trying without join...`);
+        fallbackQuery = await pool.query(
+          `SELECT id as user_id FROM users WHERE role = 'property_manager' LIMIT 1`
+        );
+      }
+
+      if (fallbackQuery.rows.length > 0) {
+        console.log(`🔍 Found fallback property manager: ${fallbackQuery.rows[0].user_id}`);
+        return fallbackQuery.rows[0].user_id;
+      }
+
+      console.log(`⚠️ No property manager found at all!`);
+      return null;
+    };
+
     // Check if building chat exists
     const checkQuery = `
       SELECT * FROM group_chats
@@ -489,11 +777,23 @@ const residentModel = {
     const checkResult = await pool.query(checkQuery, [propertyId]);
 
     if (checkResult.rows.length > 0) {
-      return checkResult.rows[0];
+      const existingChat = checkResult.rows[0];
+
+      // Ensure property owner is added to existing chat
+      const ownerQuery = `SELECT manager_id FROM properties WHERE id = $1`;
+      const ownerResult = await pool.query(ownerQuery, [propertyId]);
+
+      const validManagerId = await findValidPropertyManager(ownerResult.rows[0]?.manager_id, propertyId);
+      if (validManagerId) {
+        await this.addChatMember(existingChat.id, validManagerId, true);
+        console.log(`✅ Ensured property manager ${validManagerId} is in building chat ${existingChat.id}`);
+      }
+
+      return existingChat;
     }
 
-    // Get property name
-    const propertyQuery = `SELECT building_name, address FROM properties WHERE id = $1`;
+    // Get property name and owner
+    const propertyQuery = `SELECT building_name, address, manager_id FROM properties WHERE id = $1`;
     const propertyResult = await pool.query(propertyQuery, [propertyId]);
     const property = propertyResult.rows[0];
 
@@ -513,33 +813,56 @@ const residentModel = {
       createdById
     ]);
 
-    return result.rows[0];
+    const newChat = result.rows[0];
+
+    // Automatically add property owner as admin member
+    const validManagerId = await findValidPropertyManager(property?.manager_id, propertyId);
+    if (validManagerId) {
+      await this.addChatMember(newChat.id, validManagerId, true);
+      console.log(`✅ Auto-added property manager ${validManagerId} to new building chat ${newChat.id}`);
+    }
+
+    return newChat;
   },
 
   /**
    * Add member to group chat
    */
   async addChatMember(groupChatId, userId, isAdmin = false) {
+    console.log(`🔍 addChatMember called: groupChatId=${groupChatId}, userId=${userId}, isAdmin=${isAdmin}`);
+
     const query = `
       INSERT INTO group_chat_members (group_chat_id, user_id, is_admin)
       VALUES ($1, $2, $3)
-      ON CONFLICT (group_chat_id, user_id) DO NOTHING
+      ON CONFLICT (group_chat_id, user_id) DO UPDATE SET is_admin = EXCLUDED.is_admin
       RETURNING *
     `;
 
     const result = await pool.query(query, [groupChatId, userId, isAdmin]);
-    return result.rows[0];
+    console.log(`🔍 addChatMember result:`, result.rows[0] || 'No rows returned (conflict?)');
+
+    // Verify the member was added
+    const verifyQuery = await pool.query(
+      `SELECT * FROM group_chat_members WHERE group_chat_id = $1 AND user_id = $2`,
+      [groupChatId, userId]
+    );
+    console.log(`✅ Member verification:`, verifyQuery.rows[0] || 'NOT FOUND');
+
+    return result.rows[0] || verifyQuery.rows[0];
   },
 
   /**
    * Get group chat members
    */
   async getChatMembers(groupChatId) {
+    console.log(`🔍 getChatMembers called for groupChatId: ${groupChatId}`);
+
     const query = `
       SELECT
         gcm.*,
         u.first_name,
         u.last_name,
+        u.role,
         rp.profile_picture,
         rp.is_online,
         rp.show_online_status
@@ -547,10 +870,11 @@ const residentModel = {
       JOIN users u ON gcm.user_id = u.id
       LEFT JOIN resident_profiles rp ON rp.user_id = u.id
       WHERE gcm.group_chat_id = $1
-      ORDER BY u.first_name, u.last_name
+      ORDER BY gcm.is_admin DESC, u.first_name, u.last_name
     `;
 
     const result = await pool.query(query, [groupChatId]);
+    console.log(`🔍 getChatMembers returned ${result.rows.length} members:`, result.rows.map(m => `${m.first_name} ${m.last_name} (${m.role}, admin=${m.is_admin})`));
     return result.rows;
   },
 
@@ -687,6 +1011,12 @@ const residentModel = {
     `;
 
     const result = await pool.query(query, [userId]);
+    console.log(`🔍 getUserGroupChats for userId ${userId}: found ${result.rows.length} chats`);
+    if (result.rows.length > 0) {
+      result.rows.forEach(chat => {
+        console.log(`  - Chat "${chat.name}" (${chat.id}): ${chat.member_count} members, is_admin=${chat.is_admin}`);
+      });
+    }
     return result.rows;
   },
 

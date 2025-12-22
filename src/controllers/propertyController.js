@@ -22,8 +22,8 @@ export const createProperty = async (req, res) => {
 
     // Validate required fields
     if (!address || !city) {
-      return res.status(400).json({ 
-        message: "Address and city are required" 
+      return res.status(400).json({
+        message: "Address and city are required"
       });
     }
 
@@ -34,8 +34,8 @@ export const createProperty = async (req, res) => {
     );
 
     if (!managerProfile.rows[0]) {
-      return res.status(403).json({ 
-        message: "Property manager profile not found" 
+      return res.status(403).json({
+        message: "Property manager profile not found"
       });
     }
 
@@ -55,9 +55,52 @@ export const createProperty = async (req, res) => {
         longitude: longitude || null
     });
 
-    res.status(201).json({ 
-      message: "Property created successfully", 
-      property: newProperty 
+    // ============================================
+    // AUTO-CREATE GROUP CHAT FOR THE PROPERTY
+    // ============================================
+    try {
+      const chatName = building_name || `${address} Community`;
+
+      // Check if group chat already exists for this property
+      const existingChat = await pool.query(
+        `SELECT id FROM group_chats WHERE property_id = $1`,
+        [newProperty.id]
+      );
+
+      if (existingChat.rows.length === 0) {
+        // Create the group chat
+        const newChat = await pool.query(
+          `INSERT INTO group_chats (name, description, property_id, building_name, chat_type, created_by, is_active)
+           VALUES ($1, $2, $3, $4, $5, $6, TRUE)
+           RETURNING *`,
+          [
+            chatName,
+            'Community chat for all building residents',
+            newProperty.id,
+            building_name || null,
+            'building',
+            req.user.id
+          ]
+        );
+
+        // Add property manager as admin member
+        await pool.query(
+          `INSERT INTO group_chat_members (group_chat_id, user_id, is_admin)
+           VALUES ($1, $2, TRUE)
+           ON CONFLICT (group_chat_id, user_id) DO NOTHING`,
+          [newChat.rows[0].id, req.user.id]
+        );
+
+        console.log(`✅ Auto-created group chat "${chatName}" for property ${newProperty.id}`);
+      }
+    } catch (chatErr) {
+      // Don't fail the property creation if group chat creation fails
+      console.error("⚠️ Warning: Failed to auto-create group chat:", chatErr);
+    }
+
+    res.status(201).json({
+      message: "Property created successfully",
+      property: newProperty
     });
 
   } catch (err) {

@@ -184,30 +184,108 @@ const residentController = {
   async getDirectory(req, res) {
     try {
       const userId = req.user.id;
-      const { search, status, floor, sortBy } = req.query;
-      const profile = await residentModel.getResidentProfile(userId, userId);
+      const userRole = req.user.role;
+      const { search, status, floor, sortBy, property_id } = req.query;
 
-      if (!profile || !profile.building_name) {
-        return res.status(400).json({
-          success: false,
-          message: 'Please set your building/property in your profile first'
-        });
+      let buildingName = null;
+      let buildingAddress = null;
+
+      // If property manager, check their owned properties
+      if (userRole === 'property_manager') {
+        // Get the property manager's properties
+        const propertyQuery = await pool.query(
+          `SELECT id, building_name, address FROM properties WHERE manager_id = $1 ORDER BY created_at DESC`,
+          [userId]
+        );
+
+        if (propertyQuery.rows.length === 0) {
+          return res.status(400).json({
+            success: false,
+            message: 'You do not own any properties'
+          });
+        }
+
+        // Use specified property_id or first property
+        let property;
+        if (property_id) {
+          property = propertyQuery.rows.find(p => p.id === property_id);
+          if (!property) {
+            return res.status(400).json({
+              success: false,
+              message: 'Property not found or you do not own it'
+            });
+          }
+        } else {
+          property = propertyQuery.rows[0];
+        }
+
+        buildingName = property.building_name;
+        buildingAddress = property.address;
+        console.log(`🔍 Property manager fetching directory for owned building: ${buildingName}`);
+      } else {
+        // For residents, use their profile
+        const profile = await residentModel.getResidentProfile(userId, userId);
+
+        if (!profile || (!profile.building_name && !profile.property_id)) {
+          return res.status(400).json({
+            success: false,
+            message: 'Please set your building/property in your profile first'
+          });
+        }
+
+        // If resident has property_id, get the building_name from the property
+        if (profile.property_id) {
+          const propertyQuery = await pool.query(
+            `SELECT building_name, address FROM properties WHERE id = $1`,
+            [profile.property_id]
+          );
+          if (propertyQuery.rows.length > 0) {
+            buildingName = propertyQuery.rows[0].building_name;
+            buildingAddress = propertyQuery.rows[0].address;
+          }
+        }
+
+        // Fallback to profile building_name if property lookup failed
+        if (!buildingName) {
+          buildingName = profile.building_name;
+          buildingAddress = profile.address;
+        }
+
+        console.log(`🔍 Resident fetching directory for building: ${buildingName} (property_id: ${profile.property_id})`);
       }
 
-      console.log(`🔍 Fetching directory for building: ${profile.building_name}`);
-      const residents = await residentModel.getBuildingResidentsByName(profile.building_name, {
+      // Get property_id if we have it (for more accurate owner lookup)
+      let propertyId = null;
+      if (userRole === 'property_manager') {
+        // Already handled above - use the property we found
+        const propertyQuery2 = await pool.query(
+          `SELECT id FROM properties WHERE building_name = $1 OR address = $1 LIMIT 1`,
+          [buildingName]
+        );
+        if (propertyQuery2.rows.length > 0) {
+          propertyId = propertyQuery2.rows[0].id;
+        }
+      } else {
+        const profile = await residentModel.getResidentProfile(userId, userId);
+        propertyId = profile?.property_id;
+      }
+
+      console.log(`🔍 Calling getBuildingResidentsByName with: "${buildingName}", propertyId: ${propertyId}`);
+      const residents = await residentModel.getBuildingResidentsByName(buildingName, {
         search,
         status,
         floor,
-        sortBy
+        sortBy,
+        propertyId  // Pass property_id for more accurate owner lookup
       });
+      console.log(`🔍 Found ${residents.length} residents, owners: ${residents.filter(r => r.is_owner).length}`);
 
       res.json({
         success: true,
         residents,
         building: {
-          name: profile.building_name,
-          address: profile.address
+          name: buildingName,
+          address: buildingAddress
         }
       });
     } catch (error) {
@@ -421,7 +499,50 @@ const residentController = {
   async getGroupChats(req, res) {
     try {
       const userId = req.user.id;
-      const groupChats = await residentModel.getUserGroupChats(userId);
+      const userRole = req.user.role;
+
+      // Get user's existing group chats
+      let groupChats = await residentModel.getUserGroupChats(userId);
+
+      // If property manager, also ensure they're added to their building chats
+      if (userRole === 'property_manager') {
+        const propertyQuery = await pool.query(
+          `SELECT id, building_name FROM properties WHERE manager_id = $1`,
+          [userId]
+        );
+
+        // For each owned property, ensure the building chat exists and manager is a member
+        for (const property of propertyQuery.rows) {
+          if (property.id) {
+            try {
+              const buildingChat = await residentModel.getOrCreateBuildingChat(property.id, userId);
+              await residentModel.addChatMember(buildingChat.id, userId, true); // Add as admin
+            } catch (err) {
+              console.error(`Error ensuring manager in building chat for property ${property.id}:`, err);
+            }
+          }
+        }
+
+        // Re-fetch group chats after ensuring membership
+        groupChats = await residentModel.getUserGroupChats(userId);
+      } else {
+        // For residents, ensure they are in their building chat and property manager is also added
+        const profile = await residentModel.getOrCreateProfile(userId);
+        if (profile.property_id) {
+          try {
+            console.log(`🔍 Resident fetching group chats - ensuring resident and property manager are in building chat for property ${profile.property_id}`);
+            const buildingChat = await residentModel.getOrCreateBuildingChat(profile.property_id, userId);
+            // Also add the resident to the building chat if not already a member
+            await residentModel.addChatMember(buildingChat.id, userId, false);
+            console.log(`✅ Ensured resident ${userId} is in building chat ${buildingChat.id}`);
+          } catch (err) {
+            console.error(`Error ensuring resident/property manager in building chat:`, err);
+          }
+        }
+        // Re-fetch group chats after ensuring membership
+        groupChats = await residentModel.getUserGroupChats(userId);
+      }
+
       res.json({
         success: true,
         group_chats: groupChats
@@ -438,17 +559,70 @@ const residentController = {
   async getBuildingGroupChat(req, res) {
     try {
       const userId = req.user.id;
-      const profile = await residentModel.getOrCreateProfile(userId);
+      const userRole = req.user.role;
+      const { property_id } = req.query;
 
-      if (!profile.property_id) {
-        return res.status(400).json({
-          success: false,
-          message: 'Please set your building/property in your profile first'
-        });
+      let propertyId = null;
+
+      // If property manager, use their owned property
+      if (userRole === 'property_manager') {
+        const propertyQuery = await pool.query(
+          `SELECT id FROM properties WHERE manager_id = $1 ORDER BY created_at DESC`,
+          [userId]
+        );
+
+        if (propertyQuery.rows.length === 0) {
+          return res.status(400).json({
+            success: false,
+            message: 'You do not own any properties'
+          });
+        }
+
+        // Use specified property_id or first property
+        if (property_id) {
+          const ownedProperty = propertyQuery.rows.find(p => p.id === property_id);
+          if (!ownedProperty) {
+            return res.status(400).json({
+              success: false,
+              message: 'Property not found or you do not own it'
+            });
+          }
+          propertyId = ownedProperty.id;
+        } else {
+          propertyId = propertyQuery.rows[0].id;
+        }
+      } else {
+        // For residents, use their profile
+        const profile = await residentModel.getOrCreateProfile(userId);
+
+        if (profile.property_id) {
+          propertyId = profile.property_id;
+        } else if (profile.property_name || profile.resolved_building_name) {
+          // Try to find property by property_name or resolved_building_name
+          const buildingName = profile.property_name || profile.resolved_building_name;
+          const propertyQuery = await pool.query(
+            `SELECT id FROM properties WHERE building_name = $1 OR address = $1 LIMIT 1`,
+            [buildingName]
+          );
+
+          if (propertyQuery.rows.length > 0) {
+            propertyId = propertyQuery.rows[0].id;
+          } else {
+            return res.status(400).json({
+              success: false,
+              message: 'No matching property found for your building. Please contact the property manager.'
+            });
+          }
+        } else {
+          return res.status(400).json({
+            success: false,
+            message: 'Please set your building/property in your profile first'
+          });
+        }
       }
 
-      const groupChat = await residentModel.getOrCreateBuildingChat(profile.property_id, userId);
-      await residentModel.addChatMember(groupChat.id, userId);
+      const groupChat = await residentModel.getOrCreateBuildingChat(propertyId, userId);
+      await residentModel.addChatMember(groupChat.id, userId, userRole === 'property_manager');
       const members = await residentModel.getChatMembers(groupChat.id);
 
       res.json({
@@ -631,24 +805,74 @@ const residentController = {
   },
 
   // ============================================
-  // DIRECT MESSAGE ENDPOINTS
+  // DIRECT MESSAGE ENDPOINTS (Now using unified conversations/messages tables)
   // ============================================
   async getDirectMessageConversations(req, res) {
     try {
       const userId = req.user.id;
-      const profile = await residentModel.getOrCreateProfile(userId);
 
-      if (!profile.property_id) {
-        return res.json({
-          success: true,
-          conversations: []
-        });
-      }
-
-      const conversations = await residentModel.getDirectMessageConversations(
-        userId,
-        profile.property_id
+      // Get all conversations from the unified conversations table
+      // This now uses the same table as entrepreneur messages
+      const conversationsQuery = await pool.query(
+        `SELECT
+          c.id,
+          c.last_message_at,
+          CASE
+            WHEN c.participant1_id = $1 THEN c.participant2_id
+            ELSE c.participant1_id
+          END as other_user_id,
+          u.first_name,
+          u.last_name,
+          u.role,
+          CASE
+            WHEN u.role = 'property_manager' THEN 'Property Manager'
+            ELSE rp.unit_number
+          END as unit_number,
+          (
+            SELECT content
+            FROM messages m
+            WHERE m.conversation_id = c.id
+            ORDER BY m.created_at DESC
+            LIMIT 1
+          ) as last_message,
+          (
+            SELECT COUNT(*)
+            FROM messages m
+            WHERE m.conversation_id = c.id
+              AND m.receiver_id = $1
+              AND m.is_read = FALSE
+          ) as unread_count
+        FROM conversations c
+        JOIN users u ON (
+          CASE
+            WHEN c.participant1_id = $1 THEN c.participant2_id
+            ELSE c.participant1_id
+          END = u.id
+        )
+        LEFT JOIN resident_profiles rp ON rp.user_id = u.id
+        WHERE (c.participant1_id = $1 OR c.participant2_id = $1)
+          AND u.role IN ('resident', 'property_manager')
+        ORDER BY c.last_message_at DESC`,
+        [userId]
       );
+
+      const conversations = conversationsQuery.rows.map(conv => ({
+        id: conv.id,
+        user_id: conv.other_user_id,
+        other_user_id: conv.other_user_id,
+        first_name: conv.first_name,
+        last_name: conv.last_name,
+        other_user_name: `${conv.first_name} ${conv.last_name}`,
+        other_user_role: conv.role,
+        unit_number: conv.unit_number,
+        last_message: conv.last_message,
+        last_message_at: conv.last_message_at,
+        last_message_time: conv.last_message_at,
+        unread_count: parseInt(conv.unread_count) || 0,
+        is_property_manager: conv.role === 'property_manager'
+      }));
+
+      console.log(`📋 Found ${conversations.length} DM conversations for user ${userId}`);
 
       res.json({
         success: true,
@@ -669,14 +893,50 @@ const residentController = {
       const { recipientId } = req.params;
       const { limit = 50, offset = 0 } = req.query;
 
-      const messages = await residentModel.getDirectMessages(userId, recipientId, {
-        limit: parseInt(limit),
-        offset: parseInt(offset)
-      });
+      console.log(`📧 Fetching messages between ${userId} and ${recipientId}`);
+
+      // Find the conversation between these two users
+      const convQuery = await pool.query(
+        `SELECT id FROM conversations
+         WHERE (participant1_id = $1 AND participant2_id = $2)
+            OR (participant1_id = $2 AND participant2_id = $1)
+         LIMIT 1`,
+        [userId, recipientId]
+      );
+
+      if (convQuery.rows.length === 0) {
+        // No conversation exists yet
+        return res.json({
+          success: true,
+          messages: []
+        });
+      }
+
+      const conversationId = convQuery.rows[0].id;
+
+      // Get messages from the unified messages table
+      const messagesQuery = await pool.query(
+        `SELECT m.*,
+                u.first_name || ' ' || u.last_name as sender_name
+         FROM messages m
+         JOIN users u ON m.sender_id = u.id
+         WHERE m.conversation_id = $1
+         ORDER BY m.created_at ASC
+         LIMIT $2 OFFSET $3`,
+        [conversationId, parseInt(limit), parseInt(offset)]
+      );
+
+      // Mark messages as read
+      await pool.query(
+        `UPDATE messages
+         SET is_read = TRUE, read_at = NOW()
+         WHERE conversation_id = $1 AND receiver_id = $2 AND is_read = FALSE`,
+        [conversationId, userId]
+      );
 
       res.json({
         success: true,
-        messages
+        messages: messagesQuery.rows
       });
     } catch (error) {
       console.error('❌ Error getting direct messages:', error);
@@ -700,40 +960,103 @@ const residentController = {
         });
       }
 
-      const senderProfile = await residentModel.getOrCreateProfile(userId);
-      const recipientProfile = await residentModel.getOrCreateProfile(recipientId);
+      // Check if recipient exists
+      const recipientQuery = await pool.query(
+        'SELECT id, role FROM users WHERE id = $1',
+        [recipientId]
+      );
 
-      if (!senderProfile.property_id || !recipientProfile.property_id) {
-        return res.status(400).json({
+      if (recipientQuery.rows.length === 0) {
+        return res.status(404).json({
           success: false,
-          message: 'Both users must be assigned to a property'
+          message: 'Recipient not found'
         });
       }
 
-      if (senderProfile.property_id !== recipientProfile.property_id) {
-        return res.status(403).json({
-          success: false,
-          message: 'You can only message residents in your building'
-        });
+      const recipientRole = recipientQuery.rows[0].role;
+      console.log(`📧 User ${userId} sending message to ${recipientId} (role: ${recipientRole})`);
+
+      // For resident-to-resident, check they're in the same building
+      if (recipientRole === 'resident') {
+        const senderProfile = await residentModel.getOrCreateProfile(userId);
+        const recipientProfile = await residentModel.getOrCreateProfile(recipientId);
+
+        if (!senderProfile.property_id || !recipientProfile.property_id) {
+          return res.status(400).json({
+            success: false,
+            message: 'Both users must be assigned to a property'
+          });
+        }
+
+        if (senderProfile.property_id !== recipientProfile.property_id) {
+          return res.status(403).json({
+            success: false,
+            message: 'You can only message residents in your building'
+          });
+        }
       }
 
-      const message = await residentModel.sendDirectMessage({
-        sender_id: userId,
-        recipient_id: recipientId,
-        message_text: message_text.trim()
-      });
+      // Get or create conversation in the unified conversations table
+      let convQuery = await pool.query(
+        `SELECT id FROM conversations
+         WHERE (participant1_id = $1 AND participant2_id = $2)
+            OR (participant1_id = $2 AND participant2_id = $1)
+         LIMIT 1`,
+        [userId, recipientId]
+      );
 
+      let conversationId;
+      if (convQuery.rows.length === 0) {
+        // Create new conversation
+        const newConv = await pool.query(
+          `INSERT INTO conversations (participant1_id, participant2_id, last_message_at)
+           VALUES ($1, $2, NOW())
+           RETURNING id`,
+          [userId, recipientId]
+        );
+        conversationId = newConv.rows[0].id;
+        console.log(`📧 Created new conversation ${conversationId}`);
+      } else {
+        conversationId = convQuery.rows[0].id;
+      }
+
+      // Insert message into unified messages table
+      const messageResult = await pool.query(
+        `INSERT INTO messages (conversation_id, sender_id, receiver_id, content)
+         VALUES ($1, $2, $3, $4)
+         RETURNING *`,
+        [conversationId, userId, recipientId, message_text.trim()]
+      );
+
+      const message = messageResult.rows[0];
+
+      // Update conversation last_message_at
+      await pool.query(
+        `UPDATE conversations SET last_message_at = NOW() WHERE id = $1`,
+        [conversationId]
+      );
+
+      // Get sender info for socket notification
+      const senderInfo = await pool.query(
+        'SELECT first_name, last_name FROM users WHERE id = $1',
+        [userId]
+      );
+      const senderName = senderInfo.rows[0]
+        ? `${senderInfo.rows[0].first_name} ${senderInfo.rows[0].last_name}`
+        : 'Unknown';
+
+      // Emit socket event using the standard new_message event
       const io = req.app.get('io');
       if (io) {
-        const senderInfo = await pool.query(
-          'SELECT first_name, last_name FROM users WHERE id = $1',
-          [userId]
-        );
-        const senderName = senderInfo.rows[0]
-          ? `${senderInfo.rows[0].first_name} ${senderInfo.rows[0].last_name}`
-          : 'Unknown';
+        io.to(recipientId).emit('new_message', {
+          message: {
+            ...message,
+            sender_name: senderName
+          },
+          conversationId: conversationId
+        });
 
-        io.to(recipientId).emit('new_direct_message', {
+        io.to(userId).emit('new_message', {
           message: {
             ...message,
             sender_name: senderName
@@ -742,16 +1065,7 @@ const residentController = {
           recipient_id: recipientId
         });
 
-        io.to(userId).emit('new_direct_message', {
-          message: {
-            ...message,
-            sender_name: senderName
-          },
-          sender_id: userId,
-          recipient_id: recipientId
-        });
-
-        console.log(`📨 Sent DM notification to ${recipientId} and ${userId}`);
+        console.log(`📨 Sent message notification to ${recipientId} and ${userId}`);
       }
 
       res.status(201).json({
@@ -772,7 +1086,23 @@ const residentController = {
       const userId = req.user.id;
       const { recipientId } = req.params;
 
-      await residentModel.markDMAsRead(userId, recipientId);
+      // Find the conversation and mark messages as read in unified table
+      const convQuery = await pool.query(
+        `SELECT id FROM conversations
+         WHERE (participant1_id = $1 AND participant2_id = $2)
+            OR (participant1_id = $2 AND participant2_id = $1)
+         LIMIT 1`,
+        [userId, recipientId]
+      );
+
+      if (convQuery.rows.length > 0) {
+        await pool.query(
+          `UPDATE messages
+           SET is_read = TRUE, read_at = NOW()
+           WHERE conversation_id = $1 AND receiver_id = $2 AND is_read = FALSE`,
+          [convQuery.rows[0].id, userId]
+        );
+      }
 
       res.json({
         success: true,
