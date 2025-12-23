@@ -12,7 +12,7 @@ ADD COLUMN IF NOT EXISTS profile_picture TEXT;
 ALTER TABLE inspection_reports
 ADD COLUMN IF NOT EXISTS file_name TEXT,
 ADD COLUMN IF NOT EXISTS file_size INTEGER,
-ADD COLUMN IF NOT EXISTS file_type VARCHAR(50),
+ADD COLUMN IF NOT EXISTS file_type VARCHAR(150), -- Increased to 150 to support long MIME types like 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet'
 ADD COLUMN IF NOT EXISTS parsed_job_count INTEGER DEFAULT 0,
 ADD COLUMN IF NOT EXISTS status VARCHAR(50) DEFAULT 'pending';
 
