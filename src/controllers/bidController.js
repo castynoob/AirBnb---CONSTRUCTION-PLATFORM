@@ -1,7 +1,8 @@
 // src/controllers/bidController.js
 import pool from "../config/db.js";
 import * as Bid from "../models/bidModel.js";
-import { incrementBidCount } from "../middleware/subscriptionMiddleware.js";  // ✅ ADD THIS
+import { incrementBidCount } from "../middleware/subscriptionMiddleware.js";
+import { getIO } from "../config/socketSetup.js";
 
 // 🟢 Submit a new bid (Entrepreneur only)
 export const submitBid = async (req, res) => {
@@ -70,14 +71,60 @@ export const submitBid = async (req, res) => {
     const { plan_type } = req.subscription;
     if (plan_type === 'basic') {
       await incrementBidCount(entrepreneur_id);
-      req.bidsRemaining = req.bidsRemaining - 1; 
+      req.bidsRemaining = req.bidsRemaining - 1;
       console.log('📊 Bid count incremented:', (30 - req.bidsRemaining) + '/30');
+    }
+
+    // 🔔 Send socket notification to the property manager
+    try {
+      // Get job details and manager info
+      const jobResult = await pool.query(
+        `SELECT j.title, j.manager_id, p.building_name, u.id as manager_user_id
+         FROM jobs j
+         LEFT JOIN properties p ON j.property_id = p.id
+         LEFT JOIN manager_profiles mp ON j.manager_id = mp.id
+         LEFT JOIN users u ON mp.user_id = u.id
+         WHERE j.id = $1`,
+        [job_id]
+      );
+
+      // Get entrepreneur details
+      const entrepreneurResult = await pool.query(
+        `SELECT u.first_name, u.last_name, ep.license_number
+         FROM entrepreneur_profiles ep
+         JOIN users u ON ep.user_id = u.id
+         WHERE ep.id = $1`,
+        [entrepreneur_id]
+      );
+
+      if (jobResult.rows[0] && entrepreneurResult.rows[0]) {
+        const job = jobResult.rows[0];
+        const entrepreneur = entrepreneurResult.rows[0];
+        const io = getIO();
+
+        if (io && job.manager_user_id) {
+          io.to(job.manager_user_id.toString()).emit('new_bid', {
+            bidId: newBid.id,
+            bidderName: `${entrepreneur.first_name} ${entrepreneur.last_name}`,
+            bidderId: entrepreneur_id,
+            jobId: job_id,
+            jobTitle: job.title,
+            propertyName: job.building_name || '',
+            bidAmount: amount,
+            licenseNumber: entrepreneur.license_number || 'N/A',
+          });
+          console.log('🔔 Notification sent to manager:', job.manager_user_id);
+        }
+      }
+    } catch (notifyError) {
+      // Don't fail the bid submission if notification fails
+      console.error('⚠️ Failed to send bid notification:', notifyError.message);
     }
 
     console.log('========================================\n');
 
-    res.status(201).json({ 
-      message: "Bid submitted successfully", 
+    res.status(201).json({
+      message: "Bid submitted successfully",
       bid: newBid,
       subscription: {
         plan_type: plan_type,

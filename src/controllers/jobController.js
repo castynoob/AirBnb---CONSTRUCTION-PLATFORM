@@ -3,6 +3,7 @@ import * as Job from "../models/jobModel.js";
 import pool from "../config/db.js";
 import { uploadToSupabase, deleteFromSupabase, getPublicUrl, extractFilePathFromUrl, generateUniqueFileName } from '../utils/supabaseHelpers.js';
 import { BUCKETS } from '../config/supabase.js';
+import { getIO } from "../config/socketSetup.js";
 // 🟢 Create new job (manager only)
 export const createJob = async (req, res) => {
   try {
@@ -55,8 +56,82 @@ export const getJobById = async (req, res) => {
 // 🟣 Update job
 export const updateJob = async (req, res) => {
   try {
-    const updatedJob = await Job.updateJob(req.params.id, req.body);
-    if (!updatedJob) return res.status(404).json({ message: "Job not found" });
+    const jobId = req.params.id;
+    const updateFields = req.body;
+
+    // Get current job status before update to detect status changes
+    const currentJob = await Job.getJobById(jobId);
+    if (!currentJob) {
+      return res.status(404).json({ message: "Job not found" });
+    }
+
+    const previousStatus = currentJob.status;
+    const updatedJob = await Job.updateJob(jobId, updateFields);
+
+    if (!updatedJob) {
+      return res.status(404).json({ message: "Job not found" });
+    }
+
+    // 🔔 Send socket notifications for status changes
+    if (updateFields.status && updateFields.status !== previousStatus) {
+      try {
+        const io = getIO();
+        if (io) {
+          // Get job details with property and users info
+          const jobDetails = await pool.query(
+            `SELECT j.title, j.manager_id, j.entrepreneur_id,
+                    p.building_name,
+                    mu.id as manager_user_id,
+                    eu.id as entrepreneur_user_id,
+                    eu.first_name as entrepreneur_first_name,
+                    eu.last_name as entrepreneur_last_name
+             FROM jobs j
+             LEFT JOIN properties p ON j.property_id = p.id
+             LEFT JOIN manager_profiles mp ON j.manager_id = mp.id
+             LEFT JOIN users mu ON mp.user_id = mu.id
+             LEFT JOIN entrepreneur_profiles ep ON j.entrepreneur_id = ep.id
+             LEFT JOIN users eu ON ep.user_id = eu.id
+             WHERE j.id = $1`,
+            [jobId]
+          );
+
+          if (jobDetails.rows[0]) {
+            const job = jobDetails.rows[0];
+            const contractorName = job.entrepreneur_first_name && job.entrepreneur_last_name
+              ? `${job.entrepreneur_first_name} ${job.entrepreneur_last_name}`
+              : 'Contractor';
+
+            // Notify manager when job status changes to "in_progress"
+            if (updateFields.status.toLowerCase() === 'in_progress' && job.manager_user_id) {
+              io.to(job.manager_user_id.toString()).emit('job_started', {
+                jobId: jobId,
+                jobTitle: job.title,
+                propertyName: job.building_name || '',
+                contractorName: contractorName,
+                contractorId: job.entrepreneur_id,
+              });
+              console.log('🔔 job_started notification sent to manager:', job.manager_user_id);
+            }
+
+            // Notify manager when job status changes to "completed"
+            if (updateFields.status.toLowerCase() === 'completed' && job.manager_user_id) {
+              io.to(job.manager_user_id.toString()).emit('work_completed', {
+                jobId: jobId,
+                jobTitle: job.title,
+                propertyName: job.building_name || '',
+                contractorName: contractorName,
+                contractorId: job.entrepreneur_id,
+              });
+              console.log('🔔 work_completed notification sent to manager:', job.manager_user_id);
+            }
+          }
+        }
+      } catch (notifyError) {
+        // Don't fail the update if notification fails
+        console.error('⚠️ Failed to send job status notification:', notifyError.message);
+      }
+    }
+
     res.json({ message: "Job updated successfully", job: updatedJob });
   } catch (err) {
     console.error("❌ Error updating job:", err);

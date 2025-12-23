@@ -284,4 +284,10 @@ const setupSocket = (server) => {
   return io;
 };
 
+/**
+ * Get the Socket.io instance for use in controllers
+ * @returns {Server|null} The Socket.io server instance
+ */
+export const getIO = () => io;
+
 export default setupSocket;
