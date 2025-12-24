@@ -32,18 +32,26 @@ export const getBidsByJobId = async (job_id) => {
   return result.rows;
 };
 
-// 🔵 Get all bids by entrepreneur (with job info)
+// 🔵 Get all bids by entrepreneur (with job info and manager info)
 export const getBidsByEntrepreneurId = async (entrepreneur_id) => {
   const result = await pool.query(
-    `SELECT 
+    `SELECT
       b.id, b.job_id, b.entrepreneur_id, b.amount, b.message, b.status,
       b.created_at, b.updated_at,
-      j.title as job_title, j.description as job_description, 
+      j.title as job_title, j.description as job_description,
       j.category, j.urgency, j.due_date,
-      p.address as property_address, p.city
+      p.address as property_address, p.city,
+      mp.company_name as manager_company_name,
+      u.id as manager_user_id,
+      u.first_name as manager_first_name,
+      u.last_name as manager_last_name,
+      u.email as manager_email,
+      u.phone as manager_phone
      FROM bids b
      JOIN jobs j ON b.job_id = j.id
      LEFT JOIN properties p ON j.property_id = p.id
+     LEFT JOIN manager_profiles mp ON j.manager_id = mp.id
+     LEFT JOIN users u ON mp.user_id = u.id
      WHERE b.entrepreneur_id = $1
      ORDER BY b.created_at DESC`,
     [entrepreneur_id]
