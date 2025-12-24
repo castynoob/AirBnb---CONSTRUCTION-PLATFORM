@@ -74,8 +74,13 @@ const setupSocket = (server) => {
   // CONNECTION HANDLER
   // ============================================
   io.on('connection', (socket) => {
+    const userRoom = socket.userId.toString();
     console.log(`✅ User connected: ${socket.userId} (Socket ID: ${socket.id})`);
-    socket.join(socket.userId.toString()); // personal room
+    console.log(`🏠 User ${socket.userId} joining personal room: "${userRoom}"`);
+    socket.join(userRoom); // personal room
+
+    // Log which rooms this socket is in
+    console.log(`📋 Socket ${socket.id} rooms:`, Array.from(socket.rooms));
 
     // ============================================
     // JOIN / LEAVE CONVERSATION

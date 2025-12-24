@@ -277,14 +277,19 @@ const messageModel = {
   // CHECK IF USER CAN MESSAGE (ACCESS CONTROL)
   // ============================================
   async canUserMessage(senderId, receiverId) {
+    // Convert IDs to strings for consistent comparison (handles both UUID and integer IDs)
+    const senderIdStr = String(senderId);
+    const receiverIdStr = String(receiverId);
+
     // Get both users' roles
     const userQuery = `
       SELECT id, role FROM users WHERE id IN ($1, $2)
     `;
-    const userResult = await pool.query(userQuery, [senderId, receiverId]);
+    const userResult = await pool.query(userQuery, [senderIdStr, receiverIdStr]);
 
-    const sender = userResult.rows.find(u => u.id === senderId);
-    const receiver = userResult.rows.find(u => u.id === receiverId);
+    // Use string comparison for consistent matching
+    const sender = userResult.rows.find(u => String(u.id) === senderIdStr);
+    const receiver = userResult.rows.find(u => String(u.id) === receiverIdStr);
 
     console.log(`[canUserMessage] Sender:`, sender);
     console.log(`[canUserMessage] Receiver:`, receiver);
@@ -320,8 +325,8 @@ const messageModel = {
       (sender.role === 'entrepreneur' && receiver.role === 'supplier')
     ) {
       console.log('[canUserMessage] Checking RULE 4/5: Supplier ↔ Entrepreneur (requires accepted request)');
-      const supplierId = sender.role === 'supplier' ? senderId : receiverId;
-      const entrepreneurId = sender.role === 'entrepreneur' ? senderId : receiverId;
+      const supplierId = sender.role === 'supplier' ? senderIdStr : receiverIdStr;
+      const entrepreneurId = sender.role === 'entrepreneur' ? senderIdStr : receiverIdStr;
 
       // Check for accepted/in-progress/completed supplier requests
       // 'in-progress' = accepted, 'completed' = finished
@@ -349,8 +354,8 @@ const messageModel = {
         (sender.role === 'property_manager' && receiver.role === 'entrepreneur')
         ) {
         console.log('[canUserMessage] Checking RULE 6: Entrepreneur ↔ Property Manager (requires approved bid)');
-        const entrepreneurId = sender.role === 'entrepreneur' ? senderId : receiverId;
-        const managerId = sender.role === 'property_manager' ? senderId : receiverId;
+        const entrepreneurId = sender.role === 'entrepreneur' ? senderIdStr : receiverIdStr;
+        const managerId = sender.role === 'property_manager' ? senderIdStr : receiverIdStr;
 
         // Check for approved bids (FIXED - join through jobs table)
         const bidQuery = `

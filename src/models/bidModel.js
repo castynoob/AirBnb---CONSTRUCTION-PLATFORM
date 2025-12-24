@@ -122,3 +122,24 @@ export const declineOtherBids = async (job_id, approved_bid_id) => {
   );
   return result.rows;
 };
+
+// ✏️ Update bid amount and message (Entrepreneur only, pending bids only)
+export const updateBid = async (bid_id, { amount, message }) => {
+  const result = await pool.query(
+    `UPDATE bids
+     SET amount = $1, message = $2, updated_at = NOW()
+     WHERE id = $3
+     RETURNING *`,
+    [amount, message, bid_id]
+  );
+  return result.rows[0];
+};
+
+// 🗑️ Delete a bid (Entrepreneur only, pending bids only)
+export const deleteBid = async (bid_id) => {
+  const result = await pool.query(
+    `DELETE FROM bids WHERE id = $1 RETURNING *`,
+    [bid_id]
+  );
+  return result.rows[0];
+};

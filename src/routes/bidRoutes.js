@@ -12,7 +12,9 @@ import {
   getMyBids,
   approveBid,
   declineBid,
-  toggleFavorite
+  toggleFavorite,
+  updateBid,
+  deleteBid
 } from "../controllers/bidController.js";
 
 const router = express.Router();
@@ -44,6 +46,24 @@ router.get(
     return BID_KEYS.byEntrepreneur(entrepreneurId);
   }, TTL.FIVE_MINUTES),
   getMyBids
+);
+
+// Update bid - Entrepreneur only (pending bids only)
+router.patch(
+  "/:id",
+  verifyToken,
+  authorizeRoles("entrepreneur"),
+  invalidateCache(() => [BID_KEYS.allBids()]),
+  updateBid
+);
+
+// Delete bid - Entrepreneur only (pending bids only)
+router.delete(
+  "/:id",
+  verifyToken,
+  authorizeRoles("entrepreneur"),
+  invalidateCache(() => [BID_KEYS.allBids()]),
+  deleteBid
 );
 
 // Manager endpoints

@@ -104,7 +104,22 @@ export const submitBid = async (req, res) => {
         const io = getIO();
 
         if (io && job.manager_user_id) {
-          io.to(job.manager_user_id.toString()).emit('new_bid', {
+          const managerRoom = job.manager_user_id.toString();
+          const roomSockets = io.sockets.adapter.rooms.get(managerRoom);
+
+          console.log('🔔 NEW BID NOTIFICATION DEBUG:');
+          console.log('   Target manager user_id:', job.manager_user_id);
+          console.log('   Target room name:', managerRoom);
+          console.log('   Sockets in room:', roomSockets ? roomSockets.size : 0);
+          console.log('   Socket IDs in room:', roomSockets ? Array.from(roomSockets) : []);
+
+          // Log all connected sockets for debugging
+          console.log('   📋 All connected sockets:');
+          io.sockets.sockets.forEach((socket, socketId) => {
+            console.log(`      - Socket ${socketId}: userId=${socket.userId}, rooms=[${Array.from(socket.rooms).join(', ')}]`);
+          });
+
+          io.to(managerRoom).emit('new_bid', {
             bidId: newBid.id,
             bidderName: `${entrepreneur.first_name} ${entrepreneur.last_name}`,
             bidderId: entrepreneur_id,
@@ -114,7 +129,7 @@ export const submitBid = async (req, res) => {
             bidAmount: amount,
             licenseNumber: entrepreneur.license_number || 'N/A',
           });
-          console.log('🔔 Notification sent to manager:', job.manager_user_id);
+          console.log('✅ new_bid event emitted to room:', managerRoom);
 
           // 💾 Save bid notification to database for persistence
           try {
@@ -267,7 +282,9 @@ export const approveBid = async (req, res) => {
     }
 
     const job = await pool.query(
-      `SELECT * FROM jobs WHERE id = $1 AND manager_id = $2`,
+      `SELECT j.*, p.building_name FROM jobs j
+       LEFT JOIN properties p ON j.property_id = p.id
+       WHERE j.id = $1 AND j.manager_id = $2`,
       [bid.job_id, managerProfile.rows[0].id]
     );
 
@@ -282,6 +299,103 @@ export const approveBid = async (req, res) => {
     // Decline all other pending bids for this job
     const declinedBids = await Bid.declineOtherBids(bid.job_id, id);
     console.log(`📋 Declined ${declinedBids.length} other bid(s) for job ${bid.job_id}`);
+
+    // 🔔 Send notifications to entrepreneurs
+    try {
+      const io = getIO();
+      const jobData = job.rows[0];
+
+      // Get approved entrepreneur's user info
+      const approvedEntrepreneur = await pool.query(
+        `SELECT ep.id as profile_id, u.id as user_id, u.first_name, u.last_name
+         FROM entrepreneur_profiles ep
+         JOIN users u ON ep.user_id = u.id
+         WHERE ep.id = $1`,
+        [bid.entrepreneur_id]
+      );
+
+      if (approvedEntrepreneur.rows[0] && io) {
+        const entrepreneur = approvedEntrepreneur.rows[0];
+        const entrepreneurRoom = entrepreneur.user_id.toString();
+        const roomSockets = io.sockets.adapter.rooms.get(entrepreneurRoom);
+
+        console.log('🔔 BID APPROVED NOTIFICATION DEBUG:');
+        console.log('   Target entrepreneur user_id:', entrepreneur.user_id);
+        console.log('   Target room name:', entrepreneurRoom);
+        console.log('   Sockets in room:', roomSockets ? roomSockets.size : 0);
+
+        // Emit socket event to approved entrepreneur
+        io.to(entrepreneurRoom).emit('bid_approved', {
+          bidId: id,
+          jobId: jobData.id,
+          jobTitle: jobData.title,
+          propertyName: jobData.building_name || '',
+          bidAmount: bid.amount,
+          message: `Your bid of $${Number(bid.amount).toLocaleString()} for "${jobData.title}" has been approved!`
+        });
+        console.log('✅ bid_approved notification sent to room:', entrepreneurRoom);
+
+        // 💾 Save approved notification to database
+        await createNotification({
+          userId: entrepreneur.user_id,
+          type: 'bid_approved',
+          jobId: jobData.id,
+          jobTitle: jobData.title,
+          propertyName: jobData.building_name || '',
+          bidAmount: bid.amount,
+          content: `Your bid of $${Number(bid.amount).toLocaleString()} for "${jobData.title}" has been approved!`
+        });
+        console.log(`💾 bid_approved notification saved for entrepreneur ${entrepreneur.user_id}`);
+      }
+
+      // 🔔 Notify all declined entrepreneurs
+      for (const declinedBid of declinedBids) {
+        const declinedEntrepreneur = await pool.query(
+          `SELECT ep.id as profile_id, u.id as user_id, u.first_name, u.last_name
+           FROM entrepreneur_profiles ep
+           JOIN users u ON ep.user_id = u.id
+           WHERE ep.id = $1`,
+          [declinedBid.entrepreneur_id]
+        );
+
+        if (declinedEntrepreneur.rows[0] && io) {
+          const entrepreneur = declinedEntrepreneur.rows[0];
+          const entrepreneurRoom = entrepreneur.user_id.toString();
+          const roomSockets = io.sockets.adapter.rooms.get(entrepreneurRoom);
+
+          console.log('🔔 BID DECLINED NOTIFICATION DEBUG (auto-decline):');
+          console.log('   Target entrepreneur user_id:', entrepreneur.user_id);
+          console.log('   Target room name:', entrepreneurRoom);
+          console.log('   Sockets in room:', roomSockets ? roomSockets.size : 0);
+
+          // Emit socket event to declined entrepreneur
+          io.to(entrepreneurRoom).emit('bid_declined', {
+            bidId: declinedBid.id,
+            jobId: jobData.id,
+            jobTitle: jobData.title,
+            propertyName: jobData.building_name || '',
+            bidAmount: declinedBid.amount,
+            reason: 'another_accepted',
+            message: `Your bid for "${jobData.title}" was not selected. Another contractor was chosen for this job.`
+          });
+          console.log('✅ bid_declined notification sent to room:', entrepreneurRoom);
+
+          // 💾 Save declined notification to database
+          await createNotification({
+            userId: entrepreneur.user_id,
+            type: 'bid_declined',
+            jobId: jobData.id,
+            jobTitle: jobData.title,
+            propertyName: jobData.building_name || '',
+            bidAmount: declinedBid.amount,
+            content: `Your bid for "${jobData.title}" was not selected. Another contractor was chosen for this job.`
+          });
+          console.log(`💾 bid_declined notification saved for entrepreneur ${entrepreneur.user_id}`);
+        }
+      }
+    } catch (notifyError) {
+      console.error('⚠️ Failed to send bid approval notifications:', notifyError.message);
+    }
 
     res.json({
       message: "Bid approved successfully! Messaging is now unlocked.",
@@ -319,25 +433,182 @@ export const declineBid = async (req, res) => {
     }
 
     const job = await pool.query(
-      `SELECT * FROM jobs WHERE id = $1 AND manager_id = $2`,
+      `SELECT j.*, p.building_name FROM jobs j
+       LEFT JOIN properties p ON j.property_id = p.id
+       WHERE j.id = $1 AND j.manager_id = $2`,
       [bid.job_id, managerProfile.rows[0].id]
     );
 
     if (!job.rows[0]) {
-      return res.status(403).json({ 
-        message: "You can only decline bids for your own jobs" 
+      return res.status(403).json({
+        message: "You can only decline bids for your own jobs"
       });
     }
 
     const updatedBid = await Bid.updateBidStatus(id, "declined");
 
-    res.json({ 
-      message: "Bid declined", 
-      bid: updatedBid 
+    // 🔔 Send notification to declined entrepreneur
+    try {
+      const io = getIO();
+      const jobData = job.rows[0];
+
+      const entrepreneur = await pool.query(
+        `SELECT ep.id as profile_id, u.id as user_id, u.first_name, u.last_name
+         FROM entrepreneur_profiles ep
+         JOIN users u ON ep.user_id = u.id
+         WHERE ep.id = $1`,
+        [bid.entrepreneur_id]
+      );
+
+      if (entrepreneur.rows[0] && io) {
+        const entrepData = entrepreneur.rows[0];
+        const entrepreneurRoom = entrepData.user_id.toString();
+        const roomSockets = io.sockets.adapter.rooms.get(entrepreneurRoom);
+
+        console.log('🔔 BID DECLINED NOTIFICATION DEBUG (manual decline):');
+        console.log('   Target entrepreneur user_id:', entrepData.user_id);
+        console.log('   Target room name:', entrepreneurRoom);
+        console.log('   Sockets in room:', roomSockets ? roomSockets.size : 0);
+
+        // Emit socket event to declined entrepreneur
+        io.to(entrepreneurRoom).emit('bid_declined', {
+          bidId: id,
+          jobId: jobData.id,
+          jobTitle: jobData.title,
+          propertyName: jobData.building_name || '',
+          bidAmount: bid.amount,
+          reason: 'manager_declined',
+          message: `Your bid for "${jobData.title}" has been declined by the property manager.`
+        });
+        console.log('✅ bid_declined notification sent to room:', entrepreneurRoom);
+
+        // 💾 Save declined notification to database
+        await createNotification({
+          userId: entrepData.user_id,
+          type: 'bid_declined',
+          jobId: jobData.id,
+          jobTitle: jobData.title,
+          propertyName: jobData.building_name || '',
+          bidAmount: bid.amount,
+          content: `Your bid for "${jobData.title}" has been declined by the property manager.`
+        });
+        console.log(`💾 bid_declined notification saved for entrepreneur ${entrepData.user_id}`);
+      }
+    } catch (notifyError) {
+      console.error('⚠️ Failed to send bid decline notification:', notifyError.message);
+    }
+
+    res.json({
+      message: "Bid declined",
+      bid: updatedBid
     });
 
   } catch (err) {
     console.error("❌ Error declining bid:", err);
+    res.status(500).json({ message: "Server error" });
+  }
+};
+
+// ✏️ Update bid (Entrepreneur only - pending bids only)
+export const updateBid = async (req, res) => {
+  try {
+    const { id } = req.params;
+    const { amount, message } = req.body;
+
+    // Validate required fields
+    if (!amount) {
+      return res.status(400).json({ message: "Amount is required" });
+    }
+
+    // Get the bid
+    const bid = await Bid.getBidById(id);
+    if (!bid) {
+      return res.status(404).json({ message: "Bid not found" });
+    }
+
+    // Check if bid is still pending
+    if (bid.status !== 'pending') {
+      return res.status(400).json({
+        message: "Only pending bids can be edited"
+      });
+    }
+
+    // Get entrepreneur profile
+    const entrepreneurProfile = await pool.query(
+      `SELECT id FROM entrepreneur_profiles WHERE user_id = $1`,
+      [req.user.id]
+    );
+
+    if (!entrepreneurProfile.rows[0]) {
+      return res.status(403).json({ message: "Entrepreneur profile not found" });
+    }
+
+    // Check if this bid belongs to the entrepreneur
+    if (bid.entrepreneur_id !== entrepreneurProfile.rows[0].id) {
+      return res.status(403).json({
+        message: "You can only edit your own bids"
+      });
+    }
+
+    // Update the bid
+    const updatedBid = await Bid.updateBid(id, { amount, message: message || "" });
+
+    res.json({
+      message: "Bid updated successfully",
+      bid: updatedBid
+    });
+
+  } catch (err) {
+    console.error("❌ Error updating bid:", err);
+    res.status(500).json({ message: "Server error" });
+  }
+};
+
+// 🗑️ Delete bid (Entrepreneur only - pending bids only)
+export const deleteBid = async (req, res) => {
+  try {
+    const { id } = req.params;
+
+    // Get the bid
+    const bid = await Bid.getBidById(id);
+    if (!bid) {
+      return res.status(404).json({ message: "Bid not found" });
+    }
+
+    // Check if bid is still pending
+    if (bid.status !== 'pending') {
+      return res.status(400).json({
+        message: "Only pending bids can be deleted"
+      });
+    }
+
+    // Get entrepreneur profile
+    const entrepreneurProfile = await pool.query(
+      `SELECT id FROM entrepreneur_profiles WHERE user_id = $1`,
+      [req.user.id]
+    );
+
+    if (!entrepreneurProfile.rows[0]) {
+      return res.status(403).json({ message: "Entrepreneur profile not found" });
+    }
+
+    // Check if this bid belongs to the entrepreneur
+    if (bid.entrepreneur_id !== entrepreneurProfile.rows[0].id) {
+      return res.status(403).json({
+        message: "You can only delete your own bids"
+      });
+    }
+
+    // Delete the bid
+    const deletedBid = await Bid.deleteBid(id);
+
+    res.json({
+      message: "Bid deleted successfully",
+      bid: deletedBid
+    });
+
+  } catch (err) {
+    console.error("❌ Error deleting bid:", err);
     res.status(500).json({ message: "Server error" });
   }
 };

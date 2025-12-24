@@ -217,9 +217,21 @@ export const getJobsByEntrepreneurId = async (req, res) => {
 
     const result = await pool.query(
       `
-      SELECT j.*, mp.user_id as manager_user_id
+      SELECT j.*,
+             mp.user_id as manager_user_id,
+             p.building_name as property_name,
+             p.address as property_address,
+             p.city as property_city,
+             p.latitude as property_latitude,
+             p.longitude as property_longitude,
+             b.amount as bid_amount,
+             b.message as bid_message,
+             b.status as bid_status,
+             b.created_at as bid_submitted_at
       FROM jobs j
       LEFT JOIN manager_profiles mp ON j.manager_id::uuid = mp.id::uuid
+      LEFT JOIN properties p ON j.property_id::uuid = p.id::uuid
+      LEFT JOIN bids b ON j.id::text = b.job_id::text AND b.entrepreneur_id::text = $1
       WHERE j.entrepreneur_id = $1
       ORDER BY j.created_at DESC
       `,
