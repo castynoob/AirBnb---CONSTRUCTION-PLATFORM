@@ -3,6 +3,7 @@ import pool from "../config/db.js";
 import * as Bid from "../models/bidModel.js";
 import { incrementBidCount } from "../middleware/subscriptionMiddleware.js";
 import { getIO } from "../config/socketSetup.js";
+import { createNotification } from "./notificationController.js";
 
 // 🟢 Submit a new bid (Entrepreneur only)
 export const submitBid = async (req, res) => {
@@ -90,7 +91,7 @@ export const submitBid = async (req, res) => {
 
       // Get entrepreneur details
       const entrepreneurResult = await pool.query(
-        `SELECT u.first_name, u.last_name, ep.license_number
+        `SELECT u.id as user_id, u.first_name, u.last_name, ep.license_number
          FROM entrepreneur_profiles ep
          JOIN users u ON ep.user_id = u.id
          WHERE ep.id = $1`,
@@ -114,6 +115,24 @@ export const submitBid = async (req, res) => {
             licenseNumber: entrepreneur.license_number || 'N/A',
           });
           console.log('🔔 Notification sent to manager:', job.manager_user_id);
+
+          // 💾 Save bid notification to database for persistence
+          try {
+            await createNotification({
+              userId: job.manager_user_id,
+              type: 'bid',
+              bidderId: entrepreneur.user_id, // Use user_id, not entrepreneur_profile_id
+              bidderName: `${entrepreneur.first_name} ${entrepreneur.last_name}`,
+              jobId: job_id,
+              jobTitle: job.title,
+              propertyName: job.building_name || '',
+              bidAmount: amount,
+              licenseNumber: entrepreneur.license_number || 'N/A',
+            });
+            console.log(`💾 Bid notification saved to database for manager ${job.manager_user_id}`);
+          } catch (notifDbError) {
+            console.error('❌ Failed to save bid notification to DB:', notifDbError);
+          }
         }
       }
     } catch (notifyError) {

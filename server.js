@@ -39,6 +39,7 @@ import registrationRoutes from "./src/routes/registrationRoutes.js";
 import inspectionRoutes from "./src/routes/inspectionRoutes.js";
 import supplierRoutes from "./src/routes/supplierRoutes.js";
 import favoriteRoutes from "./src/routes/favoriteRoutes.js";
+import notificationRoutes from "./src/routes/notificationRoutes.js";
 import debugRoutes from "./src/routes/debugRoutes.js";
 import residentRoutes from "./src/routes/residentRoutes.js";
 import groupChatRoutes from "./src/routes/groupChatRoutes.js";
@@ -159,6 +160,7 @@ app.use("/api/email", emailRoutes);
 app.use("/api/inspections", inspectionRoutes);
 app.use("/api", supplierRoutes);
 app.use("/api", favoriteRoutes);
+app.use("/api", notificationRoutes);
 app.use("/api", debugRoutes); // DEBUG - Remove in production
 app.use("/api/residents", residentRoutes);
 app.use("/api/residents/group-chats", groupChatRoutes);

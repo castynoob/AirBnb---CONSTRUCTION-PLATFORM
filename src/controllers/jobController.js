@@ -4,6 +4,7 @@ import pool from "../config/db.js";
 import { uploadToSupabase, deleteFromSupabase, getPublicUrl, extractFilePathFromUrl, generateUniqueFileName } from '../utils/supabaseHelpers.js';
 import { BUCKETS } from '../config/supabase.js';
 import { getIO } from "../config/socketSetup.js";
+import { createNotification } from "./notificationController.js";
 // 🟢 Create new job (manager only)
 export const createJob = async (req, res) => {
   try {
@@ -111,6 +112,22 @@ export const updateJob = async (req, res) => {
                 contractorId: job.entrepreneur_id,
               });
               console.log('🔔 job_started notification sent to manager:', job.manager_user_id);
+
+              // 💾 Save job_started notification to database
+              try {
+                await createNotification({
+                  userId: job.manager_user_id,
+                  type: 'started',
+                  contractorId: job.entrepreneur_user_id, // Use user_id, not entrepreneur_profile_id
+                  contractorName: contractorName,
+                  jobId: jobId,
+                  workTitle: job.title,
+                  propertyName: job.building_name || '',
+                });
+                console.log(`💾 job_started notification saved to DB for manager ${job.manager_user_id}`);
+              } catch (notifDbError) {
+                console.error('❌ Failed to save job_started notification:', notifDbError);
+              }
             }
 
             // Notify manager when job status changes to "completed"
@@ -123,6 +140,22 @@ export const updateJob = async (req, res) => {
                 contractorId: job.entrepreneur_id,
               });
               console.log('🔔 work_completed notification sent to manager:', job.manager_user_id);
+
+              // 💾 Save work_completed notification to database
+              try {
+                await createNotification({
+                  userId: job.manager_user_id,
+                  type: 'completed',
+                  contractorId: job.entrepreneur_user_id, // Use user_id, not entrepreneur_profile_id
+                  contractorName: contractorName,
+                  jobId: jobId,
+                  workTitle: job.title,
+                  propertyName: job.building_name || '',
+                });
+                console.log(`💾 work_completed notification saved to DB for manager ${job.manager_user_id}`);
+              } catch (notifDbError) {
+                console.error('❌ Failed to save work_completed notification:', notifDbError);
+              }
             }
           }
         }

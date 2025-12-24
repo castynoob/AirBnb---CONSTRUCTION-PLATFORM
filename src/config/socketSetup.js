@@ -7,6 +7,7 @@ import jwt from 'jsonwebtoken';
 import messageModel from '../models/messageModel.js'; // ✅ your DB model
 import { sendMessageNotificationEmail } from '../config/emailConfig.js';
 import pool from '../config/db.js';
+import { createNotification } from '../controllers/notificationController.js';
 
 let io = null;
 
@@ -203,6 +204,21 @@ const setupSocket = (server) => {
           senderName,
           content,
         });
+
+        // 💾 Save notification to database for persistence
+        try {
+          await createNotification({
+            userId: receiverId,
+            type: 'message',
+            senderId: socket.userId,
+            senderName,
+            content: content.substring(0, 100) + (content.length > 100 ? '...' : ''),
+            conversationId: actualConversationId,
+          });
+          console.log(`💾 Message notification saved to database for user ${receiverId}`);
+        } catch (notifError) {
+          console.error('❌ Failed to save message notification:', notifError);
+        }
 
         // 📧 Send email notification (async, don't wait)
         if (receiverData) {
