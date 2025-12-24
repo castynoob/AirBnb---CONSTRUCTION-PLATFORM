@@ -72,13 +72,25 @@ const residentModel = {
       RETURNING *
     `;
 
-    const result = await pool.query(query, [
+    await pool.query(query, [
       userId, property_id, unit_number, floor, building_section, move_in_date, bio, profile_picture,
       show_email, show_phone, show_unit, show_move_in_date, allow_messages, show_online_status,
       contact_via_email, contact_via_phone, contact_via_message
     ]);
 
-    return result.rows[0];
+    // Return full profile with user data (email, phone, first_name, last_name)
+    const fullProfileQuery = `
+      SELECT rp.*, u.email, u.first_name, u.last_name, u.phone,
+             p.building_name, p.address,
+             COALESCE(rp.property_name, p.building_name) as resolved_building_name
+      FROM resident_profiles rp
+      JOIN users u ON rp.user_id = u.id
+      LEFT JOIN properties p ON rp.property_id = p.id
+      WHERE rp.user_id = $1
+    `;
+
+    const fullResult = await pool.query(fullProfileQuery, [userId]);
+    return fullResult.rows[0];
   },
 
   /**

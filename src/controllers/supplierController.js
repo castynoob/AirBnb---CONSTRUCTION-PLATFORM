@@ -3,6 +3,7 @@ import pool from "../config/db.js";
 import { uploadToSupabase, deleteFromSupabase, getPublicUrl, extractFilePathFromUrl, generateUniqueFileName } from '../utils/supabaseHelpers.js';
 import { BUCKETS } from '../config/supabase.js';
 import * as supplierModel from '../models/supplierModel.js';
+import messageModel from '../models/messageModel.js';
 
 // ========================================
 // PROFILE MANAGEMENT
@@ -490,10 +491,29 @@ export const updateRequestStatus = async (req, res) => {
       });
     }
 
+    // Get the request details before updating (to get user IDs)
+    const existingRequest = await supplierModel.getRequestById(requestId);
+    if (!existingRequest) {
+      return res.status(404).json({ message: "Request not found" });
+    }
+
     const request = await supplierModel.updateRequestStatus(requestId, status);
 
-    if (!request) {
-      return res.status(404).json({ message: "Request not found" });
+    // If status changed to 'in-progress' (accepted), create a conversation
+    if (status === 'in-progress' && existingRequest.status === 'pending') {
+      try {
+        const supplierUserId = existingRequest.supplier_user_id;
+        const entrepreneurUserId = existingRequest.entrepreneur_user_id;
+
+        console.log(`[Supplier Request] Creating conversation between supplier ${supplierUserId} and entrepreneur ${entrepreneurUserId}`);
+
+        // Create or get existing conversation
+        await messageModel.getOrCreateConversation(supplierUserId, entrepreneurUserId);
+        console.log('[Supplier Request] ✅ Conversation created/found successfully');
+      } catch (convError) {
+        console.error('[Supplier Request] Error creating conversation:', convError);
+        // Don't fail the request update if conversation creation fails
+      }
     }
 
     res.status(200).json({

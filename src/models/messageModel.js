@@ -312,16 +312,34 @@ const messageModel = {
       return true;
     }
 
-    // RULE 4: Suppliers can message entrepreneurs
-    if (sender.role === 'supplier' && receiver.role === 'entrepreneur') {
-      console.log('[canUserMessage] ✅ RULE 4 matched: Supplier → Entrepreneur');
-      return true;
-    }
+    // RULE 4 & 5: Supplier <-> Entrepreneur (RESTRICTED!)
+    // Only allowed if supplier has ACCEPTED a material request from the entrepreneur
+    // Note: "Accept" sets status to 'in-progress', "Complete" sets to 'completed'
+    if (
+      (sender.role === 'supplier' && receiver.role === 'entrepreneur') ||
+      (sender.role === 'entrepreneur' && receiver.role === 'supplier')
+    ) {
+      console.log('[canUserMessage] Checking RULE 4/5: Supplier ↔ Entrepreneur (requires accepted request)');
+      const supplierId = sender.role === 'supplier' ? senderId : receiverId;
+      const entrepreneurId = sender.role === 'entrepreneur' ? senderId : receiverId;
 
-    // RULE 5: Entrepreneurs can message suppliers
-    if (sender.role === 'entrepreneur' && receiver.role === 'supplier') {
-      console.log('[canUserMessage] ✅ RULE 5 matched: Entrepreneur → Supplier');
-      return true;
+      // Check for accepted/in-progress/completed supplier requests
+      // 'in-progress' = accepted, 'completed' = finished
+      const requestQuery = `
+        SELECT sr.id
+        FROM supplier_requests sr
+        JOIN supplier_profiles sp ON sr.supplier_id = sp.id
+        JOIN entrepreneur_profiles ep ON sr.entrepreneur_id = ep.id
+        WHERE sp.user_id = $1
+          AND ep.user_id = $2
+          AND sr.status IN ('in-progress', 'completed')
+        LIMIT 1
+      `;
+
+      const requestResult = await pool.query(requestQuery, [supplierId, entrepreneurId]);
+      const hasAcceptedRequest = requestResult.rows.length > 0;
+      console.log(`[canUserMessage] Accepted request check: ${hasAcceptedRequest ? '✅ Found' : '❌ Not found'}`);
+      return hasAcceptedRequest;
     }
 
     // RULE 6: Entrepreneur <-> Property Manager (RESTRICTED!)
