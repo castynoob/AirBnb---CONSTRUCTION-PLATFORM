@@ -9,7 +9,7 @@ import { sendVerificationEmail, sendPasswordResetEmail } from "../config/emailCo
 
 dotenv.config();
 
-// ✅ UPDATED: Registration with Email Verification
+// ✅ UPDATED: Registration with Email Verifications
 export const register = async (req, res) => {
   try {
     const { email, password, first_name, last_name, role } = req.body;
