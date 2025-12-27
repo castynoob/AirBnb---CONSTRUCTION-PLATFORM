@@ -9,6 +9,7 @@ import {
   logout,
   requestPasswordReset,
   resetPassword,
+  changePassword,
   getCurrentUser,
   updateCurrentUser,
   googleLogin
@@ -52,6 +53,9 @@ router.post("/logout", logout);
 // Password reset with rate limiting
 router.post("/request-password-reset", passwordResetRateLimiter, requestPasswordReset);
 router.post("/reset-password", passwordResetRateLimiter, resetPassword);
+
+// Change password (requires authentication)
+router.put("/change-password", authenticateToken, changePassword);
 
 // Profile endpoints (require authentication)
 router.get("/me", authenticateToken, getCurrentUser);

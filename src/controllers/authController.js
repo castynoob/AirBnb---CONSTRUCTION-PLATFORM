@@ -438,6 +438,96 @@ export const resetPassword = async (req, res) => {
   }
 };
 
+// 🆕 NEW: Change Password (Authenticated users)
+export const changePassword = async (req, res) => {
+  try {
+    const { currentPassword, newPassword, confirmPassword } = req.body;
+    const userId = req.user.id; // From authenticateToken middleware
+
+    // Validate inputs
+    if (!currentPassword || !newPassword || !confirmPassword) {
+      return res.status(400).json({
+        message: "All fields are required"
+      });
+    }
+
+    if (newPassword !== confirmPassword) {
+      return res.status(400).json({
+        message: "New passwords do not match"
+      });
+    }
+
+    if (newPassword.length < 8) {
+      return res.status(400).json({
+        message: "Password must be at least 8 characters long"
+      });
+    }
+
+    // Password strength validation
+    const hasUpperCase = /[A-Z]/.test(newPassword);
+    const hasLowerCase = /[a-z]/.test(newPassword);
+    const hasNumber = /[0-9]/.test(newPassword);
+    const hasSpecialChar = /[!@#$%^&*(),.?":{}|<>]/.test(newPassword);
+
+    if (!hasUpperCase || !hasLowerCase || !hasNumber || !hasSpecialChar) {
+      return res.status(400).json({
+        message: "Password must contain at least one uppercase letter, one lowercase letter, one number, and one special character"
+      });
+    }
+
+    // Get current user with password
+    const userResult = await pool.query(
+      `SELECT id, password, provider FROM users WHERE id = $1`,
+      [userId]
+    );
+
+    if (userResult.rows.length === 0) {
+      return res.status(404).json({ message: "User not found" });
+    }
+
+    const user = userResult.rows[0];
+
+    // Check if user registered via Google (no password)
+    if (user.provider === 'google' && !user.password) {
+      return res.status(400).json({
+        message: "Cannot change password for accounts registered via Google. Please use Google to sign in."
+      });
+    }
+
+    // Verify current password
+    const isMatch = await bcrypt.compare(currentPassword, user.password);
+    if (!isMatch) {
+      return res.status(401).json({
+        message: "Current password is incorrect"
+      });
+    }
+
+    // Check if new password is same as current
+    const isSamePassword = await bcrypt.compare(newPassword, user.password);
+    if (isSamePassword) {
+      return res.status(400).json({
+        message: "New password must be different from current password"
+      });
+    }
+
+    // Hash new password
+    const hashedPassword = await bcrypt.hash(newPassword, 10);
+
+    // Update password in database
+    await pool.query(
+      `UPDATE users
+       SET password = $1, updated_at = NOW()
+       WHERE id = $2`,
+      [hashedPassword, userId]
+    );
+
+    res.json({ message: "Password changed successfully" });
+  } catch (err) {
+    console.error("❌ Change password error:", err);
+    res.status(500).json({ message: "Server error" });
+  }
+};
+
 // 🆕 NEW: Google Login
 export const googleLogin = async (req, res) => {
     try {

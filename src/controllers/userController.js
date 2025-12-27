@@ -633,3 +633,105 @@ export const updateUserPhone = async (req, res) => {
     });
   }
 };
+
+// ========================================
+// 🏭 SUPPLIER PROFILE FUNCTIONS
+// ========================================
+
+/**
+ * Get Supplier Profile by User ID
+ * GET /api/users/supplier/:userId
+ *
+ * Fetches supplier profile by user ID
+ */
+export const getSupplierProfileByUserId = async (req, res) => {
+  try {
+    const userId = req.params.userId;
+
+    // Check if user exists
+    const userResult = await pool.query(
+      "SELECT id, role FROM users WHERE id = $1",
+      [userId]
+    );
+
+    if (userResult.rows.length === 0) {
+      return res.status(404).json({ message: "User not found" });
+    }
+
+    const userRole = userResult.rows[0].role;
+    if (userRole !== "supplier") {
+      return res.status(403).json({
+        message: "Access denied: The provided user is not a supplier",
+      });
+    }
+
+    // Fetch supplier profile by user_id
+    const supplier = await pool.query(
+      `SELECT sp.*,
+              u.email,
+              u.first_name,
+              u.middle_name,
+              u.last_name,
+              u.phone as user_phone,
+              u.profile_picture,
+              u.role
+       FROM supplier_profiles sp
+       JOIN users u ON sp.user_id = u.id
+       WHERE sp.user_id = $1`,
+      [userId]
+    );
+
+    if (supplier.rows.length === 0) {
+      return res
+        .status(404)
+        .json({ message: "Supplier profile not found for this user" });
+    }
+
+    res.status(200).json({
+      message: "Supplier profile fetched successfully",
+      profile: supplier.rows[0],
+    });
+  } catch (error) {
+    console.error("Error fetching supplier profile by user ID:", error);
+    res.status(500).json({ message: "Server error" });
+  }
+};
+
+/**
+ * Get Supplier Profile by Supplier Profile ID
+ * GET /api/users/supplier/profile/id/:supplierId
+ *
+ * Fetches supplier profile by supplier profile ID
+ */
+export const getSupplierProfileById = async (req, res) => {
+  try {
+    const supplierId = req.params.supplierId;
+
+    const result = await pool.query(
+      `SELECT sp.*,
+              u.email,
+              u.first_name,
+              u.middle_name,
+              u.last_name,
+              u.phone as user_phone,
+              u.profile_picture,
+              u.role
+       FROM supplier_profiles sp
+       JOIN users u ON sp.user_id = u.id
+       WHERE sp.id = $1`,
+      [supplierId]
+    );
+
+    if (result.rows.length === 0) {
+      return res.status(404).json({ message: "Supplier profile not found" });
+    }
+
+    res.status(200).json({
+      message: "Supplier profile fetched successfully",
+      profile: result.rows[0],
+    });
+  } catch (error) {
+    console.error("Error fetching supplier by id:", error);
+    res.status(500).json({ message: "Server error" });
+  }
+};
