@@ -62,6 +62,20 @@ export const USER_KEYS = {
   managerById: (managerId) => `manager:id:${managerId}`,
 
   /**
+   * Supplier profile by user ID
+   * @param {number} userId - User ID
+   * @returns {string} Cache key
+   */
+  supplier: (userId) => `user:supplier:${userId}`,
+
+  /**
+   * Supplier by supplier profile ID
+   * @param {number} supplierId - Supplier profile ID
+   * @returns {string} Cache key
+   */
+  supplierById: (supplierId) => `supplier:id:${supplierId}`,
+
+  /**
    * Pattern to invalidate all user-related caches for a user
    * @param {number} userId - User ID
    * @returns {string} Pattern

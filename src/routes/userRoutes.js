@@ -10,6 +10,8 @@ import {
   getManagerProfileByUserId,
   getEntrepreneurProfileByUserId,
   getManagerProfileById,
+  getSupplierProfileByUserId,
+  getSupplierProfileById,
   uploadManagerProfilePicture,
   uploadEntrepreneurProfilePicture,
   deleteManagerProfilePicture,
@@ -61,7 +63,7 @@ router.get(
 router.get(
   "/entrepreneur/user/:userId",
   authenticateToken,
-  authorizeRoles("entrepreneur", "property_manager"),
+  authorizeRoles("entrepreneur", "property_manager", "supplier"),
   cacheMiddleware((req) => USER_KEYS.entrepreneur(req.params.userId), TTL.ONE_HOUR),
   getEntrepreneurProfileByUserId
 );
@@ -73,6 +75,28 @@ router.get(
   authorizeRoles("entrepreneur", "property_manager"),
   cacheMiddleware((req) => USER_KEYS.managerById(req.params.managerId), TTL.ONE_HOUR),
   getManagerProfileById
+);
+
+// ========================================
+// 🏭 SUPPLIER PROFILE ROUTES
+// ========================================
+
+// Get supplier by user ID - CACHED (1 hour)
+router.get(
+  "/supplier/:userId",
+  authenticateToken,
+  authorizeRoles("entrepreneur", "property_manager", "supplier"),
+  cacheMiddleware((req) => USER_KEYS.supplier(req.params.userId), TTL.ONE_HOUR),
+  getSupplierProfileByUserId
+);
+
+// Get supplier by supplier profile ID - CACHED (1 hour)
+router.get(
+  "/supplier/profile/id/:supplierId",
+  authenticateToken,
+  authorizeRoles("entrepreneur", "property_manager", "supplier"),
+  cacheMiddleware((req) => USER_KEYS.supplierById(req.params.supplierId), TTL.ONE_HOUR),
+  getSupplierProfileById
 );
 
 // ========================================

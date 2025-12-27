@@ -155,7 +155,17 @@ export const isPropertyOwner = async (property_id, manager_id) => {
 // 🟢 Get all properties (for any authenticated user)
 export const getAllProperties = async () => {
   const result = await pool.query(
-    `SELECT * FROM properties ORDER BY created_at DESC`
+    `SELECT p.*,
+            mp.company_name as manager_company_name,
+            mp.user_id as manager_user_id,
+            mp.image as manager_image,
+            u.first_name as manager_first_name,
+            u.last_name as manager_last_name,
+            u.email as manager_email
+     FROM properties p
+     LEFT JOIN manager_profiles mp ON p.manager_id = mp.id
+     LEFT JOIN users u ON mp.user_id = u.id
+     ORDER BY p.created_at DESC`
   );
   return result.rows;
 };

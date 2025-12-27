@@ -102,8 +102,9 @@ export const updateJob = async (req, res) => {
               ? `${job.entrepreneur_first_name} ${job.entrepreneur_last_name}`
               : 'Contractor';
 
-            // Notify manager when job status changes to "in_progress"
-            if (updateFields.status.toLowerCase() === 'in_progress' && job.manager_user_id) {
+            // Notify manager when job status changes to "in_progress" or "ongoing"
+            const statusLower = updateFields.status.toLowerCase();
+            if ((statusLower === 'in_progress' || statusLower === 'ongoing') && job.manager_user_id) {
               io.to(job.manager_user_id.toString()).emit('job_started', {
                 jobId: jobId,
                 jobTitle: job.title,
@@ -131,7 +132,7 @@ export const updateJob = async (req, res) => {
             }
 
             // Notify manager when job status changes to "completed"
-            if (updateFields.status.toLowerCase() === 'completed' && job.manager_user_id) {
+            if (statusLower === 'completed' && job.manager_user_id) {
               io.to(job.manager_user_id.toString()).emit('work_completed', {
                 jobId: jobId,
                 jobTitle: job.title,
