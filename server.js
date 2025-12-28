@@ -43,6 +43,7 @@ import notificationRoutes from "./src/routes/notificationRoutes.js";
 import debugRoutes from "./src/routes/debugRoutes.js";
 import residentRoutes from "./src/routes/residentRoutes.js";
 import groupChatRoutes from "./src/routes/groupChatRoutes.js";
+import contractRoutes from "./src/routes/contractRoutes.js";
 
 // ============================================
 // SOCKET SETUP
@@ -145,6 +146,7 @@ app.use(express.json());
 // ============================================
 // PUBLIC ROUTES (no auth) - must come BEFORE protected routes
 app.use("/api", registrationRoutes);
+app.use("/api", debugRoutes); // DEBUG - No auth, must be before messageRoutes
 
 // PROTECTED ROUTES
 app.use("/api/auth", authRoutes);
@@ -161,9 +163,9 @@ app.use("/api/inspections", inspectionRoutes);
 app.use("/api", supplierRoutes);
 app.use("/api", favoriteRoutes);
 app.use("/api", notificationRoutes);
-app.use("/api", debugRoutes); // DEBUG - Remove in production
 app.use("/api/residents", residentRoutes);
 app.use("/api/residents/group-chats", groupChatRoutes);
+app.use("/api/contracts", contractRoutes);
 
 // ============================================
 // HEALTH CHECK

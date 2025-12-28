@@ -72,3 +72,6 @@ export const requirePropertyManager = async (req, res, next) => {
         res.status(500).json({ error: 'Server error' });
     }
 };
+
+// Alias for requirePropertyManager
+export const requireManager = requirePropertyManager;

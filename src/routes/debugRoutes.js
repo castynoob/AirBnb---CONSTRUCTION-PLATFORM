@@ -58,4 +58,58 @@ router.post("/debug/check-supplier-login", async (req, res) => {
   }
 });
 
+// Reset password for any user (DEBUG ONLY - Remove in production!)
+router.post("/debug/reset-password", async (req, res) => {
+  try {
+    const { email, newPassword } = req.body;
+
+    if (!email || !newPassword) {
+      return res.status(400).json({
+        error: "Email and newPassword are required"
+      });
+    }
+
+    // Check if user exists
+    const userResult = await pool.query(
+      `SELECT id, email, role, first_name, last_name FROM users WHERE email = $1`,
+      [email]
+    );
+
+    if (userResult.rows.length === 0) {
+      return res.status(404).json({
+        error: "User not found with this email"
+      });
+    }
+
+    const user = userResult.rows[0];
+
+    // Hash the new password
+    const salt = await bcrypt.genSalt(10);
+    const hashedPassword = await bcrypt.hash(newPassword, salt);
+
+    // Update password in database
+    await pool.query(
+      `UPDATE users SET password = $1, updated_at = NOW() WHERE id = $2`,
+      [hashedPassword, user.id]
+    );
+
+    console.log(`🔐 Password reset for user: ${email} (${user.role})`);
+
+    return res.json({
+      success: true,
+      message: "Password reset successfully",
+      user: {
+        id: user.id,
+        email: user.email,
+        role: user.role,
+        name: `${user.first_name} ${user.last_name}`
+      }
+    });
+
+  } catch (error) {
+    console.error("Password reset error:", error);
+    res.status(500).json({ error: error.message });
+  }
+});
+
 export default router;

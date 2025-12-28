@@ -28,6 +28,8 @@ export const submitBid = async (req, res) => {
 
     const entrepreneur_id = req.entrepreneur_profile_id;
 
+    // Note: Stripe Connect onboarding is optional at bid time
+    // Entrepreneur will be prompted to complete it after bid approval
     console.log('\n🔍 Checking for existing bid...');
     console.log('   - job_id:', job_id);
     console.log('   - entrepreneur_id:', entrepreneur_id);
@@ -318,37 +320,46 @@ export const approveBid = async (req, res) => {
         const entrepreneur = approvedEntrepreneur.rows[0];
         const entrepreneurRoom = entrepreneur.user_id.toString();
         const roomSockets = io.sockets.adapter.rooms.get(entrepreneurRoom);
+        const managerUserId = req.user.id; // The manager who is approving
 
         console.log('🔔 BID APPROVED NOTIFICATION DEBUG:');
+        console.log('   Manager user_id (who approved):', managerUserId);
         console.log('   Target entrepreneur user_id:', entrepreneur.user_id);
         console.log('   Target room name:', entrepreneurRoom);
         console.log('   Sockets in room:', roomSockets ? roomSockets.size : 0);
+        console.log('   Are they the same user?:', managerUserId === entrepreneur.user_id);
 
-        // Emit socket event to approved entrepreneur
-        io.to(entrepreneurRoom).emit('bid_approved', {
-          bidId: id,
-          jobId: jobData.id,
-          jobTitle: jobData.title,
-          propertyName: jobData.building_name || '',
-          bidAmount: bid.amount,
-          message: `Your bid of $${Number(bid.amount).toLocaleString()} for "${jobData.title}" has been approved!`
-        });
-        console.log('✅ bid_approved notification sent to room:', entrepreneurRoom);
+        // SAFETY CHECK: Don't send bid_approved notification to the manager who approved it
+        if (entrepreneur.user_id === managerUserId) {
+          console.warn('⚠️ SKIPPING bid_approved notification - entrepreneur and manager are the same user!');
+        } else {
+          // Emit socket event to approved entrepreneur
+          io.to(entrepreneurRoom).emit('bid_approved', {
+            bidId: id,
+            jobId: jobData.id,
+            jobTitle: jobData.title,
+            propertyName: jobData.building_name || '',
+            bidAmount: bid.amount,
+            message: `Your bid of $${Number(bid.amount).toLocaleString()} for "${jobData.title}" has been approved!`
+          });
+          console.log('✅ bid_approved notification sent to room:', entrepreneurRoom);
 
-        // 💾 Save approved notification to database
-        await createNotification({
-          userId: entrepreneur.user_id,
-          type: 'bid_approved',
-          jobId: jobData.id,
-          jobTitle: jobData.title,
-          propertyName: jobData.building_name || '',
-          bidAmount: bid.amount,
-          content: `Your bid of $${Number(bid.amount).toLocaleString()} for "${jobData.title}" has been approved!`
-        });
-        console.log(`💾 bid_approved notification saved for entrepreneur ${entrepreneur.user_id}`);
+          // 💾 Save approved notification to database
+          await createNotification({
+            userId: entrepreneur.user_id,
+            type: 'bid_approved',
+            jobId: jobData.id,
+            jobTitle: jobData.title,
+            propertyName: jobData.building_name || '',
+            bidAmount: bid.amount,
+            content: `Your bid of $${Number(bid.amount).toLocaleString()} for "${jobData.title}" has been approved!`
+          });
+          console.log(`💾 bid_approved notification saved for entrepreneur ${entrepreneur.user_id}`);
+        }
       }
 
       // 🔔 Notify all declined entrepreneurs
+      const managerUserId = req.user.id; // The manager who is approving
       for (const declinedBid of declinedBids) {
         const declinedEntrepreneur = await pool.query(
           `SELECT ep.id as profile_id, u.id as user_id, u.first_name, u.last_name
@@ -364,9 +375,17 @@ export const approveBid = async (req, res) => {
           const roomSockets = io.sockets.adapter.rooms.get(entrepreneurRoom);
 
           console.log('🔔 BID DECLINED NOTIFICATION DEBUG (auto-decline):');
+          console.log('   Manager user_id (who approved):', managerUserId);
           console.log('   Target entrepreneur user_id:', entrepreneur.user_id);
           console.log('   Target room name:', entrepreneurRoom);
           console.log('   Sockets in room:', roomSockets ? roomSockets.size : 0);
+          console.log('   Are they the same user?:', managerUserId === entrepreneur.user_id);
+
+          // SAFETY CHECK: Don't send bid_declined notification to the manager
+          if (entrepreneur.user_id === managerUserId) {
+            console.warn('⚠️ SKIPPING bid_declined notification - entrepreneur and manager are the same user!');
+            continue;
+          }
 
           // Emit socket event to declined entrepreneur
           io.to(entrepreneurRoom).emit('bid_declined', {
@@ -464,35 +483,43 @@ export const declineBid = async (req, res) => {
         const entrepData = entrepreneur.rows[0];
         const entrepreneurRoom = entrepData.user_id.toString();
         const roomSockets = io.sockets.adapter.rooms.get(entrepreneurRoom);
+        const managerUserId = req.user.id; // The manager who is declining
 
         console.log('🔔 BID DECLINED NOTIFICATION DEBUG (manual decline):');
+        console.log('   Manager user_id (who declined):', managerUserId);
         console.log('   Target entrepreneur user_id:', entrepData.user_id);
         console.log('   Target room name:', entrepreneurRoom);
         console.log('   Sockets in room:', roomSockets ? roomSockets.size : 0);
+        console.log('   Are they the same user?:', managerUserId === entrepData.user_id);
 
-        // Emit socket event to declined entrepreneur
-        io.to(entrepreneurRoom).emit('bid_declined', {
-          bidId: id,
-          jobId: jobData.id,
-          jobTitle: jobData.title,
-          propertyName: jobData.building_name || '',
-          bidAmount: bid.amount,
-          reason: 'manager_declined',
-          message: `Your bid for "${jobData.title}" has been declined by the property manager.`
-        });
-        console.log('✅ bid_declined notification sent to room:', entrepreneurRoom);
+        // SAFETY CHECK: Don't send bid_declined notification to the manager
+        if (entrepData.user_id === managerUserId) {
+          console.warn('⚠️ SKIPPING bid_declined notification - entrepreneur and manager are the same user!');
+        } else {
+          // Emit socket event to declined entrepreneur
+          io.to(entrepreneurRoom).emit('bid_declined', {
+            bidId: id,
+            jobId: jobData.id,
+            jobTitle: jobData.title,
+            propertyName: jobData.building_name || '',
+            bidAmount: bid.amount,
+            reason: 'manager_declined',
+            message: `Your bid for "${jobData.title}" has been declined by the property manager.`
+          });
+          console.log('✅ bid_declined notification sent to room:', entrepreneurRoom);
 
-        // 💾 Save declined notification to database
-        await createNotification({
-          userId: entrepData.user_id,
-          type: 'bid_declined',
-          jobId: jobData.id,
-          jobTitle: jobData.title,
-          propertyName: jobData.building_name || '',
-          bidAmount: bid.amount,
-          content: `Your bid for "${jobData.title}" has been declined by the property manager.`
-        });
-        console.log(`💾 bid_declined notification saved for entrepreneur ${entrepData.user_id}`);
+          // 💾 Save declined notification to database
+          await createNotification({
+            userId: entrepData.user_id,
+            type: 'bid_declined',
+            jobId: jobData.id,
+            jobTitle: jobData.title,
+            propertyName: jobData.building_name || '',
+            bidAmount: bid.amount,
+            content: `Your bid for "${jobData.title}" has been declined by the property manager.`
+          });
+          console.log(`💾 bid_declined notification saved for entrepreneur ${entrepData.user_id}`);
+        }
       }
     } catch (notifyError) {
       console.error('⚠️ Failed to send bid decline notification:', notifyError.message);

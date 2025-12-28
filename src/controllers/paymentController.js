@@ -530,6 +530,145 @@ const PaymentController = {
                     }
                     break;
 
+                // ============================================
+                // STRIPE CONNECT EVENTS
+                // ============================================
+                case 'account.updated':
+                    const account = event.data.object;
+                    console.log(`🔗 Connect account updated: ${account.id}`);
+
+                    // Update entrepreneur profile with latest Stripe account status
+                    const isOnboarded = account.details_submitted && account.charges_enabled;
+                    await db.query(
+                        `UPDATE entrepreneur_profiles
+                         SET stripe_connect_onboarded = $1,
+                             stripe_connect_details_submitted = $2,
+                             stripe_connect_charges_enabled = $3,
+                             stripe_connect_payouts_enabled = $4,
+                             stripe_onboarding_completed_at = CASE
+                                 WHEN $1 = true AND stripe_onboarding_completed_at IS NULL
+                                 THEN NOW()
+                                 ELSE stripe_onboarding_completed_at
+                             END,
+                             updated_at = NOW()
+                         WHERE stripe_connect_account_id = $5`,
+                        [
+                            isOnboarded,
+                            account.details_submitted,
+                            account.charges_enabled,
+                            account.payouts_enabled,
+                            account.id
+                        ]
+                    );
+                    console.log(`✅ Entrepreneur profile updated for Connect account ${account.id}`);
+                    break;
+
+                case 'payment_intent.succeeded':
+                    const paymentIntent = event.data.object;
+                    console.log(`💰 PaymentIntent succeeded: ${paymentIntent.id}`);
+
+                    // Update contract if this payment is for a contract
+                    if (paymentIntent.metadata?.contract_id) {
+                        await db.query(
+                            `UPDATE contracts
+                             SET payment_status = 'succeeded',
+                                 status = 'paid',
+                                 stripe_charge_id = $1,
+                                 paid_at = NOW(),
+                                 updated_at = NOW()
+                             WHERE id = $2`,
+                            [paymentIntent.latest_charge, paymentIntent.metadata.contract_id]
+                        );
+
+                        // Log contract event
+                        await db.query(
+                            `INSERT INTO contract_events (contract_id, event_type, actor_role, stripe_event_id, event_data)
+                             VALUES ($1, 'payment_succeeded', 'system', $2, $3)`,
+                            [
+                                paymentIntent.metadata.contract_id,
+                                event.id,
+                                JSON.stringify({ payment_intent_id: paymentIntent.id, amount: paymentIntent.amount })
+                            ]
+                        );
+                        console.log(`✅ Contract ${paymentIntent.metadata.contract_id} payment recorded`);
+                    }
+                    break;
+
+                case 'payment_intent.payment_failed':
+                    const failedPayment = event.data.object;
+                    console.log(`❌ PaymentIntent failed: ${failedPayment.id}`);
+
+                    if (failedPayment.metadata?.contract_id) {
+                        await db.query(
+                            `UPDATE contracts
+                             SET payment_status = 'failed',
+                                 updated_at = NOW()
+                             WHERE id = $1`,
+                            [failedPayment.metadata.contract_id]
+                        );
+
+                        // Log contract event
+                        await db.query(
+                            `INSERT INTO contract_events (contract_id, event_type, actor_role, stripe_event_id, event_data)
+                             VALUES ($1, 'payment_failed', 'system', $2, $3)`,
+                            [
+                                failedPayment.metadata.contract_id,
+                                event.id,
+                                JSON.stringify({
+                                    payment_intent_id: failedPayment.id,
+                                    error: failedPayment.last_payment_error?.message
+                                })
+                            ]
+                        );
+                        console.log(`❌ Contract ${failedPayment.metadata.contract_id} payment failed`);
+                    }
+                    break;
+
+                case 'transfer.created':
+                    const transfer = event.data.object;
+                    console.log(`💸 Transfer created: ${transfer.id}`);
+
+                    if (transfer.metadata?.contract_id) {
+                        await db.query(
+                            `UPDATE contracts
+                             SET stripe_transfer_id = $1,
+                                 payout_status = 'processing',
+                                 updated_at = NOW()
+                             WHERE id = $2`,
+                            [transfer.id, transfer.metadata.contract_id]
+                        );
+                        console.log(`✅ Contract ${transfer.metadata.contract_id} transfer initiated`);
+                    }
+                    break;
+
+                case 'transfer.paid':
+                    const paidTransfer = event.data.object;
+                    console.log(`✅ Transfer paid: ${paidTransfer.id}`);
+
+                    // Find contract by transfer ID and update payout status
+                    await db.query(
+                        `UPDATE contracts
+                         SET payout_status = 'completed',
+                             payout_completed_at = NOW(),
+                             updated_at = NOW()
+                         WHERE stripe_transfer_id = $1`,
+                        [paidTransfer.id]
+                    );
+                    break;
+
+                case 'transfer.failed':
+                    const failedTransfer = event.data.object;
+                    console.log(`❌ Transfer failed: ${failedTransfer.id}`);
+
+                    await db.query(
+                        `UPDATE contracts
+                         SET payout_status = 'failed',
+                             updated_at = NOW()
+                         WHERE stripe_transfer_id = $1`,
+                        [failedTransfer.id]
+                    );
+                    break;
+
                 default:
                     console.log(`ℹ️ Unhandled event type: ${event.type}`);
             }
