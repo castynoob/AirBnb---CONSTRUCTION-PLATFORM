@@ -82,8 +82,9 @@ router.get(
 // ========================================
 
 // Get supplier by user ID - CACHED (1 hour)
+// Note: Using /supplier/user/:userId to avoid conflict with /supplier/profile route in supplierRoutes
 router.get(
-  "/supplier/:userId",
+  "/supplier/user/:userId",
   authenticateToken,
   authorizeRoles("entrepreneur", "property_manager", "supplier"),
   cacheMiddleware((req) => USER_KEYS.supplier(req.params.userId), TTL.ONE_HOUR),

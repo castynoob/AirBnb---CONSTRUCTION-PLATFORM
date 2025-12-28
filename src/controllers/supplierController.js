@@ -166,9 +166,9 @@ export const uploadSupplierProfilePicture = async (req, res) => {
     }
 
     // Delete old image if exists
-    if (profile.catalog_pdf_url) {
+    if (profile.profile_image_url) {
       try {
-        const oldFilePath = extractFilePathFromUrl(profile.catalog_pdf_url, BUCKETS.PROFILE_IMAGES);
+        const oldFilePath = extractFilePathFromUrl(profile.profile_image_url, BUCKETS.PROFILE_IMAGES);
         if (oldFilePath) {
           await deleteFromSupabase(BUCKETS.PROFILE_IMAGES, oldFilePath);
         }
@@ -198,7 +198,7 @@ export const uploadSupplierProfilePicture = async (req, res) => {
 
     // Update profile with new image URL
     await pool.query(
-      'UPDATE supplier_profiles SET catalog_pdf_url = $1, updated_at = NOW() WHERE user_id = $2',
+      'UPDATE supplier_profiles SET profile_image_url = $1, updated_at = NOW() WHERE user_id = $2',
       [imageUrl, userId]
     );
 
