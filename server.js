@@ -44,6 +44,7 @@ import debugRoutes from "./src/routes/debugRoutes.js";
 import residentRoutes from "./src/routes/residentRoutes.js";
 import groupChatRoutes from "./src/routes/groupChatRoutes.js";
 import contractRoutes from "./src/routes/contractRoutes.js";
+import adminRoutes from "./src/routes/adminRoutes.js";
 
 // ============================================
 // SOCKET SETUP
@@ -147,6 +148,7 @@ app.use(express.json());
 // PUBLIC ROUTES (no auth) - must come BEFORE protected routes
 app.use("/api", registrationRoutes);
 app.use("/api", debugRoutes); // DEBUG - No auth, must be before messageRoutes
+app.use("/api/admin", adminRoutes); // Admin routes - has its own auth, must be before messageRoutes
 
 // PROTECTED ROUTES
 app.use("/api/auth", authRoutes);

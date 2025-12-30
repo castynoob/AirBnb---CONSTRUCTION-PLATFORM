@@ -131,6 +131,19 @@ export const declineOtherBids = async (job_id, approved_bid_id) => {
   return result.rows;
 };
 
+// 🔴 Decline all bids for a job (when job is force-closed by admin)
+export const declineAllBidsForJob = async (job_id) => {
+  const result = await pool.query(
+    `UPDATE bids
+     SET status = 'declined', updated_at = NOW()
+     WHERE job_id = $1
+     AND status = 'pending'
+     RETURNING *`,
+    [job_id]
+  );
+  return result.rows;
+};
+
 // ✏️ Update bid amount and message (Entrepreneur only, pending bids only)
 export const updateBid = async (bid_id, { amount, message }) => {
   const result = await pool.query(

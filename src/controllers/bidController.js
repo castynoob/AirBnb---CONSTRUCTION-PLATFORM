@@ -4,6 +4,11 @@ import * as Bid from "../models/bidModel.js";
 import { incrementBidCount } from "../middleware/subscriptionMiddleware.js";
 import { getIO } from "../config/socketSetup.js";
 import { createNotification } from "./notificationController.js";
+import {
+  createUserActivityLog,
+  ActivityActions,
+  EntityTypes,
+} from "../models/userActivityModel.js";
 
 // 🟢 Submit a new bid (Entrepreneur only)
 export const submitBid = async (req, res) => {
@@ -158,6 +163,19 @@ export const submitBid = async (req, res) => {
     }
 
     console.log('========================================\n');
+
+    // Log user activity
+    const ipAddress = req.ip || req.headers['x-forwarded-for'] || req.connection?.remoteAddress;
+    const userAgent = req.headers['user-agent'];
+    await createUserActivityLog(
+      req.user.id,
+      ActivityActions.BID_SUBMITTED,
+      EntityTypes.BID,
+      newBid.id,
+      { job_id: job_id, amount: amount },
+      ipAddress,
+      userAgent
+    );
 
     res.status(201).json({
       message: "Bid submitted successfully",
@@ -416,6 +434,19 @@ export const approveBid = async (req, res) => {
       console.error('⚠️ Failed to send bid approval notifications:', notifyError.message);
     }
 
+    // Log user activity - manager accepting bid
+    const ipAddress = req.ip || req.headers['x-forwarded-for'] || req.connection?.remoteAddress;
+    const userAgent = req.headers['user-agent'];
+    await createUserActivityLog(
+      req.user.id,
+      ActivityActions.BID_ACCEPTED,
+      EntityTypes.BID,
+      id,
+      { job_id: bid.job_id, entrepreneur_id: bid.entrepreneur_id, amount: bid.amount },
+      ipAddress,
+      userAgent
+    );
+
     res.json({
       message: "Bid approved successfully! Messaging is now unlocked.",
       bid: updatedBid,
@@ -525,6 +556,19 @@ export const declineBid = async (req, res) => {
       console.error('⚠️ Failed to send bid decline notification:', notifyError.message);
     }
 
+    // Log user activity - manager rejecting bid
+    const ipAddress = req.ip || req.headers['x-forwarded-for'] || req.connection?.remoteAddress;
+    const userAgent = req.headers['user-agent'];
+    await createUserActivityLog(
+      req.user.id,
+      ActivityActions.BID_REJECTED,
+      EntityTypes.BID,
+      id,
+      { job_id: bid.job_id, entrepreneur_id: bid.entrepreneur_id, amount: bid.amount },
+      ipAddress,
+      userAgent
+    );
+
     res.json({
       message: "Bid declined",
       bid: updatedBid
@@ -628,6 +672,19 @@ export const deleteBid = async (req, res) => {
 
     // Delete the bid
     const deletedBid = await Bid.deleteBid(id);
+
+    // Log user activity - entrepreneur withdrawing bid
+    const ipAddress = req.ip || req.headers['x-forwarded-for'] || req.connection?.remoteAddress;
+    const userAgent = req.headers['user-agent'];
+    await createUserActivityLog(
+      req.user.id,
+      ActivityActions.BID_WITHDRAWN,
+      EntityTypes.BID,
+      id,
+      { job_id: bid.job_id, amount: bid.amount },
+      ipAddress,
+      userAgent
+    );
 
     res.json({
       message: "Bid deleted successfully",

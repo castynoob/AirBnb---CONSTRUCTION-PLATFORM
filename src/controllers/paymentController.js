@@ -3,6 +3,11 @@ import Subscription from '../models/subscriptionModel.js';
 import db from '../config/db.js';
 import * as cache from '../config/cache.js';
 import { SUBSCRIPTION_KEYS } from '../utils/cacheKeys.js';
+import {
+    createUserActivityLog,
+    ActivityActions,
+    EntityTypes,
+} from '../models/userActivityModel.js';
 
 // ✅ UPDATED - Add price_id for each plan
 // TODO: Replace these with your actual Stripe price IDs from dashboard
@@ -179,6 +184,19 @@ const PaymentController = {
 
             console.log(`✅ Subscription created for user ${user_id}: ${plan_type} plan`);
 
+            // Log user activity
+            const ipAddress = req.ip || req.headers['x-forwarded-for'] || req.connection?.remoteAddress;
+            const userAgent = req.headers['user-agent'];
+            await createUserActivityLog(
+                user_id,
+                ActivityActions.SUBSCRIPTION_CREATED,
+                EntityTypes.SUBSCRIPTION,
+                subscription.id,
+                { plan_type: plan_type, trial_end: subscription.trial_end },
+                ipAddress,
+                userAgent
+            );
+
             res.json({
                 success: true,
                 message: 'Subscription created successfully! Your 14-day free trial has started.',
@@ -195,9 +213,9 @@ const PaymentController = {
 
         } catch (error) {
             console.error('❌ Create subscription error:', error);
-            res.status(500).json({ 
+            res.status(500).json({
                 error: 'Failed to create subscription',
-                message: error.message 
+                message: error.message
             });
         }
     },
@@ -290,6 +308,19 @@ const PaymentController = {
             await Subscription.cancel(subscription.stripe_subscription_id);
 
             console.log(`🗑️ Subscription canceled for user ${user_id}`);
+
+            // Log user activity
+            const ipAddress = req.ip || req.headers['x-forwarded-for'] || req.connection?.remoteAddress;
+            const userAgent = req.headers['user-agent'];
+            await createUserActivityLog(
+                user_id,
+                ActivityActions.SUBSCRIPTION_CANCELLED,
+                EntityTypes.SUBSCRIPTION,
+                subscription.stripe_subscription_id,
+                { plan_type: subscription.plan_type, cancel_at: updatedSub.cancel_at },
+                ipAddress,
+                userAgent
+            );
 
             res.json({
                 success: true,
@@ -389,6 +420,19 @@ const PaymentController = {
 
             console.log(`💰 Budget unlocked for user ${user_id}, job ${job_id}`);
 
+            // Log user activity
+            const ipAddress = req.ip || req.headers['x-forwarded-for'] || req.connection?.remoteAddress;
+            const userAgent = req.headers['user-agent'];
+            await createUserActivityLog(
+                user_id,
+                ActivityActions.BUDGET_UNLOCKED,
+                EntityTypes.JOB,
+                job_id,
+                { amount: 2000, job_title: jobQuery.rows[0].title },
+                ipAddress,
+                userAgent
+            );
+
             res.json({
                 success: true,
                 message: 'Budget unlocked successfully!',
@@ -398,9 +442,9 @@ const PaymentController = {
 
         } catch (error) {
             console.error('❌ Unlock budget error:', error);
-            res.status(500).json({ 
+            res.status(500).json({
                 error: 'Failed to unlock budget',
-                message: error.message 
+                message: error.message
             });
         }
     },

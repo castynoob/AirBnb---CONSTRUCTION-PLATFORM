@@ -5,6 +5,11 @@ import { uploadToSupabase, deleteFromSupabase, getPublicUrl, extractFilePathFrom
 import { BUCKETS } from '../config/supabase.js';
 import { getIO } from "../config/socketSetup.js";
 import { createNotification } from "./notificationController.js";
+import {
+  createUserActivityLog,
+  ActivityActions,
+  EntityTypes,
+} from "../models/userActivityModel.js";
 // 🟢 Create new job (manager only)
 export const createJob = async (req, res) => {
   try {
@@ -24,6 +29,20 @@ export const createJob = async (req, res) => {
     const jobData = { ...req.body, manager_id };
 
     const newJob = await Job.createJob(jobData);
+
+    // Log user activity
+    const ipAddress = req.ip || req.headers['x-forwarded-for'] || req.connection?.remoteAddress;
+    const userAgent = req.headers['user-agent'];
+    await createUserActivityLog(
+      req.user.id,
+      ActivityActions.JOB_CREATED,
+      EntityTypes.JOB,
+      newJob.id,
+      { title: newJob.title, property_id: newJob.property_id },
+      ipAddress,
+      userAgent
+    );
+
     res.status(201).json({ message: "Job created successfully", job: newJob });
   } catch (err) {
     console.error("❌ Error creating job:", err);
@@ -72,6 +91,36 @@ export const updateJob = async (req, res) => {
     if (!updatedJob) {
       return res.status(404).json({ message: "Job not found" });
     }
+
+    // Log user activity for job update
+    const ipAddress = req.ip || req.headers['x-forwarded-for'] || req.connection?.remoteAddress;
+    const userAgent = req.headers['user-agent'];
+
+    // Determine the action type based on status change
+    let actionType = ActivityActions.JOB_UPDATED;
+    if (updateFields.status) {
+      const statusLower = updateFields.status.toLowerCase();
+      if (statusLower === 'closed' || statusLower === 'completed') {
+        actionType = ActivityActions.JOB_CLOSED;
+      } else if (statusLower === 'cancelled') {
+        actionType = ActivityActions.JOB_CANCELLED;
+      }
+    }
+
+    await createUserActivityLog(
+      req.user.id,
+      actionType,
+      EntityTypes.JOB,
+      jobId,
+      {
+        title: updatedJob.title,
+        previous_status: previousStatus,
+        new_status: updateFields.status || previousStatus,
+        updated_fields: Object.keys(updateFields)
+      },
+      ipAddress,
+      userAgent
+    );
 
     // 🔔 Send socket notifications for status changes
     if (updateFields.status && updateFields.status !== previousStatus) {
@@ -176,7 +225,28 @@ export const updateJob = async (req, res) => {
 // 🔴 Delete job
 export const deleteJob = async (req, res) => {
   try {
-    await Job.deleteJob(req.params.id);
+    const jobId = req.params.id;
+
+    // Get job details before deleting for logging
+    const job = await Job.getJobById(jobId);
+
+    await Job.deleteJob(jobId);
+
+    // Log user activity
+    if (job) {
+      const ipAddress = req.ip || req.headers['x-forwarded-for'] || req.connection?.remoteAddress;
+      const userAgent = req.headers['user-agent'];
+      await createUserActivityLog(
+        req.user.id,
+        ActivityActions.JOB_CANCELLED,
+        EntityTypes.JOB,
+        jobId,
+        { title: job.title, action: 'deleted' },
+        ipAddress,
+        userAgent
+      );
+    }
+
     res.json({ message: "Job deleted successfully" });
   } catch (err) {
     console.error("❌ Error deleting job:", err);

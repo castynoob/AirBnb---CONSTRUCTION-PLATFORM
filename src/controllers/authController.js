@@ -6,6 +6,11 @@ import pool from "../config/db.js";
 import { createUser, findUserByEmail } from "../models/userModel.js";
 import { createRefreshToken, findRefreshToken, deleteRefreshToken } from "../models/refreshTokenModel.js";
 import { sendVerificationEmail, sendPasswordResetEmail } from "../config/emailConfig.js";
+import {
+  createUserActivityLog,
+  ActivityActions,
+  EntityTypes,
+} from "../models/userActivityModel.js";
 
 dotenv.config();
 
@@ -85,13 +90,26 @@ export const login = async (req, res) => {
     // Create long-lived refresh token (7 days)
     const refreshToken = await createRefreshToken(user.id);
 
+    // Log user activity
+    const ipAddress = req.ip || req.headers['x-forwarded-for'] || req.connection?.remoteAddress;
+    const userAgent = req.headers['user-agent'];
+    await createUserActivityLog(
+      user.id,
+      ActivityActions.LOGIN,
+      EntityTypes.USER,
+      user.id,
+      { method: 'email_password' },
+      ipAddress,
+      userAgent
+    );
+
     res.json({
       message: "Login successful",
       accessToken,
       refreshToken,
-      user: { 
-        id: user.id, 
-        email: user.email, 
+      user: {
+        id: user.id,
+        email: user.email,
         role: user.role,
         first_name: user.first_name,
         last_name: user.last_name
@@ -129,9 +147,23 @@ export const verifyEmail = async (req, res) => {
       });
     }
 
+    // Log user activity
+    const verifiedUser = result.rows[0];
+    const ipAddress = req.ip || req.headers['x-forwarded-for'] || req.connection?.remoteAddress;
+    const userAgent = req.headers['user-agent'];
+    await createUserActivityLog(
+      verifiedUser.id,
+      ActivityActions.EMAIL_VERIFIED,
+      EntityTypes.USER,
+      verifiedUser.id,
+      { email: verifiedUser.email },
+      ipAddress,
+      userAgent
+    );
+
     res.json({
       message: "Email verified successfully. You can now log in.",
-      user: result.rows[0]
+      user: verifiedUser
     });
   } catch (err) {
     console.error("❌ Email verification error:", err);
@@ -270,13 +302,32 @@ export const refreshAccessToken = async (req, res) => {
 export const logout = async (req, res) => {
   try {
     const { refreshToken } = req.body;
-    
+
     if (!refreshToken) {
       return res.status(400).json({ message: "Refresh token required" });
     }
 
+    // Get user ID from refresh token before deleting it
+    const tokenData = await findRefreshToken(refreshToken);
+    const userId = tokenData?.user_id;
+
     await deleteRefreshToken(refreshToken);
-    
+
+    // Log user activity (if we have the user ID)
+    if (userId) {
+      const ipAddress = req.ip || req.headers['x-forwarded-for'] || req.connection?.remoteAddress;
+      const userAgent = req.headers['user-agent'];
+      await createUserActivityLog(
+        userId,
+        ActivityActions.LOGOUT,
+        EntityTypes.USER,
+        userId,
+        null,
+        ipAddress,
+        userAgent
+      );
+    }
+
     res.json({ message: "Logout successful" });
   } catch (err) {
     console.error("❌ Logout error:", err);
@@ -316,8 +367,21 @@ export const requestPasswordReset = async (req, res) => {
     // Send reset email
     await sendPasswordResetEmail(email, resetToken);
 
-    res.json({ 
-      message: "If your email is registered, you will receive a password reset link" 
+    // Log user activity
+    const ipAddress = req.ip || req.headers['x-forwarded-for'] || req.connection?.remoteAddress;
+    const userAgent = req.headers['user-agent'];
+    await createUserActivityLog(
+      user.id,
+      ActivityActions.PASSWORD_RESET_REQUESTED,
+      EntityTypes.USER,
+      user.id,
+      null,
+      ipAddress,
+      userAgent
+    );
+
+    res.json({
+      message: "If your email is registered, you will receive a password reset link"
     });
   } catch (err) {
     console.error("❌ Password reset request error:", err);
@@ -361,26 +425,39 @@ export const updateCurrentUser = async (req, res) => {
   try {
     // Get the data from the request body
     const { first_name, middle_name, last_name, phone } = req.body;
-    
+
     // Update the database
     const result = await pool.query(
-      `UPDATE users 
-       SET first_name = $1, 
-           middle_name = $2, 
-           last_name = $3, 
-           phone = $4, 
+      `UPDATE users
+       SET first_name = $1,
+           middle_name = $2,
+           last_name = $3,
+           phone = $4,
            updated_at = NOW()
-       WHERE id = $5 
+       WHERE id = $5
        RETURNING id, email, role, first_name, middle_name, last_name, phone`,
       [first_name, middle_name, last_name, phone, req.user.id]
     );
 
+    // Log user activity
+    const ipAddress = req.ip || req.headers['x-forwarded-for'] || req.connection?.remoteAddress;
+    const userAgent = req.headers['user-agent'];
+    await createUserActivityLog(
+      req.user.id,
+      ActivityActions.PROFILE_UPDATED,
+      EntityTypes.USER,
+      req.user.id,
+      { updated_fields: ['first_name', 'middle_name', 'last_name', 'phone'].filter(f => req.body[f] !== undefined) },
+      ipAddress,
+      userAgent
+    );
+
     // Send back the updated user data
-    res.json({ 
+    res.json({
       message: "Profile updated successfully",
-      user: result.rows[0] 
+      user: result.rows[0]
     });
-    
+
   } catch (err) {
     console.error("❌ Update user error:", err);
     res.status(500).json({ message: "Server error" });
@@ -423,12 +500,25 @@ export const resetPassword = async (req, res) => {
 
     // Update password and clear reset token
     await pool.query(
-      `UPDATE users 
-       SET password = $1, 
-           reset_token = NULL, 
-           reset_token_expires = NULL 
+      `UPDATE users
+       SET password = $1,
+           reset_token = NULL,
+           reset_token_expires = NULL
        WHERE id = $2`,
       [hashedPassword, user.rows[0].id]
+    );
+
+    // Log user activity
+    const ipAddress = req.ip || req.headers['x-forwarded-for'] || req.connection?.remoteAddress;
+    const userAgent = req.headers['user-agent'];
+    await createUserActivityLog(
+      user.rows[0].id,
+      ActivityActions.PASSWORD_CHANGED,
+      EntityTypes.USER,
+      user.rows[0].id,
+      { method: 'reset_token' },
+      ipAddress,
+      userAgent
     );
 
     res.json({ message: "Password reset successfully. You can now log in." });
@@ -521,6 +611,19 @@ export const changePassword = async (req, res) => {
       [hashedPassword, userId]
     );
 
+    // Log user activity
+    const ipAddress = req.ip || req.headers['x-forwarded-for'] || req.connection?.remoteAddress;
+    const userAgent = req.headers['user-agent'];
+    await createUserActivityLog(
+      userId,
+      ActivityActions.PASSWORD_CHANGED,
+      EntityTypes.USER,
+      userId,
+      null,
+      ipAddress,
+      userAgent
+    );
+
     res.json({ message: "Password changed successfully" });
   } catch (err) {
     console.error("❌ Change password error:", err);
@@ -560,13 +663,26 @@ export const googleLogin = async (req, res) => {
         // 3. Create long-lived refresh token (7 days)
         const refreshToken = await createRefreshToken(user.id);
 
+        // Log user activity
+        const ipAddress = req.ip || req.headers['x-forwarded-for'] || req.connection?.remoteAddress;
+        const userAgent = req.headers['user-agent'];
+        await createUserActivityLog(
+          user.id,
+          ActivityActions.LOGIN,
+          EntityTypes.USER,
+          user.id,
+          { method: 'google' },
+          ipAddress,
+          userAgent
+        );
+
         res.json({
             message: "Google login successful",
             accessToken,
             refreshToken,
-            user: { 
-                id: user.id, 
-                email: user.email, 
+            user: {
+                id: user.id,
+                email: user.email,
                 role: user.role,
                 first_name: user.first_name,
                 last_name: user.last_name

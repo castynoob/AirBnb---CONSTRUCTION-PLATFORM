@@ -13,8 +13,10 @@ const pool = new Pool({
   query_timeout: 30000,
 });
 
-pool.on("connect", () => {
+pool.on("connect", async (client) => {
   console.log("✅ Connected to PostgreSQL database");
+  // Set timezone for consistent timestamp handling (Eastern Time - Toronto)
+  await client.query("SET timezone = 'America/Toronto'");
 });
 
 pool.on("error", (err) => {
