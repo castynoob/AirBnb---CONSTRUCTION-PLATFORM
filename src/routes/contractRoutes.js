@@ -64,6 +64,18 @@ router.post(
 );
 
 /**
+ * @route   GET /api/contracts/connect/payouts-summary
+ * @desc    Get entrepreneur's payouts summary and transaction history
+ * @access  Entrepreneur only
+ */
+router.get(
+  '/connect/payouts-summary',
+  authenticateToken,
+  requireEntrepreneur,
+  StripeConnectController.getPayoutsSummary
+);
+
+/**
  * @route   GET /api/contracts/connect/entrepreneur-status/:entrepreneur_id
  * @desc    Check if an entrepreneur can receive payments (for managers)
  * @access  Manager only

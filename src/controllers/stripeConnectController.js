@@ -317,6 +317,167 @@ const StripeConnectController = {
   },
 
   /**
+   * GET PAYOUTS SUMMARY
+   * Returns earnings summary, charts data, and transaction history for the entrepreneur
+   * GET /api/contracts/connect/payouts-summary
+   */
+  async getPayoutsSummary(req, res) {
+    try {
+      const user_id = req.user.id;
+
+      // Get entrepreneur profile
+      const entrepreneurResult = await pool.query(
+        `SELECT id, stripe_connect_account_id
+         FROM entrepreneur_profiles
+         WHERE user_id = $1`,
+        [user_id]
+      );
+
+      if (entrepreneurResult.rows.length === 0) {
+        return res.status(403).json({
+          error: 'Entrepreneur profile required'
+        });
+      }
+
+      const entrepreneur = entrepreneurResult.rows[0];
+
+      // Get contract statistics from database
+      const statsResult = await pool.query(
+        `SELECT
+           COUNT(*) FILTER (WHERE payout_status = 'completed') as completed_contracts,
+           COUNT(*) FILTER (WHERE payment_status = 'succeeded') as total_contracts,
+           COALESCE(SUM(entrepreneur_payout_amount) FILTER (WHERE payout_status = 'completed'), 0) as total_paid,
+           COALESCE(SUM(entrepreneur_payout_amount) FILTER (WHERE payment_status = 'succeeded' AND payout_status != 'completed'), 0) as pending_amount,
+           COALESCE(SUM(entrepreneur_payout_amount), 0) as total_earnings,
+           COALESCE(SUM(contract_amount), 0) as gross_earnings,
+           COALESCE(SUM(platform_fee_amount), 0) as total_platform_fees
+         FROM contracts
+         WHERE entrepreneur_id = $1 AND payment_status = 'succeeded'`,
+        [entrepreneur.id]
+      );
+
+      const stats = statsResult.rows[0];
+
+      // Get monthly earnings for last 6 months
+      const monthlyResult = await pool.query(
+        `SELECT
+           TO_CHAR(DATE_TRUNC('month', COALESCE(payout_completed_at, paid_at)), 'YYYY-MM') as month,
+           TO_CHAR(DATE_TRUNC('month', COALESCE(payout_completed_at, paid_at)), 'Mon') as month_label,
+           COALESCE(SUM(entrepreneur_payout_amount), 0) as earnings,
+           COUNT(*) as contracts
+         FROM contracts
+         WHERE entrepreneur_id = $1
+           AND payment_status = 'succeeded'
+           AND COALESCE(payout_completed_at, paid_at) >= DATE_TRUNC('month', NOW()) - INTERVAL '5 months'
+         GROUP BY DATE_TRUNC('month', COALESCE(payout_completed_at, paid_at))
+         ORDER BY month ASC`,
+        [entrepreneur.id]
+      );
+
+      // Get weekly earnings for last 8 weeks
+      const weeklyResult = await pool.query(
+        `SELECT
+           TO_CHAR(DATE_TRUNC('week', COALESCE(payout_completed_at, paid_at)), 'YYYY-WW') as week,
+           TO_CHAR(DATE_TRUNC('week', COALESCE(payout_completed_at, paid_at)), 'Mon DD') as week_label,
+           COALESCE(SUM(entrepreneur_payout_amount), 0) as earnings,
+           COUNT(*) as contracts
+         FROM contracts
+         WHERE entrepreneur_id = $1
+           AND payment_status = 'succeeded'
+           AND COALESCE(payout_completed_at, paid_at) >= DATE_TRUNC('week', NOW()) - INTERVAL '7 weeks'
+         GROUP BY DATE_TRUNC('week', COALESCE(payout_completed_at, paid_at))
+         ORDER BY week ASC`,
+        [entrepreneur.id]
+      );
+
+      // Get recent transactions with full details
+      const transactionsResult = await pool.query(
+        `SELECT
+           c.id,
+           c.job_id,
+           j.title as job_title,
+           c.contract_amount,
+           c.platform_fee_amount,
+           c.platform_fee_percentage,
+           c.entrepreneur_payout_amount as amount,
+           c.payout_status as status,
+           c.payment_status,
+           c.paid_at,
+           c.payout_completed_at,
+           COALESCE(c.payout_completed_at, c.paid_at) as date,
+           mp.id as manager_profile_id,
+           u.first_name as manager_first_name,
+           u.last_name as manager_last_name
+         FROM contracts c
+         JOIN jobs j ON c.job_id = j.id
+         JOIN manager_profiles mp ON c.manager_id = mp.id
+         JOIN users u ON mp.user_id = u.id
+         WHERE c.entrepreneur_id = $1 AND c.payment_status = 'succeeded'
+         ORDER BY COALESCE(c.payout_completed_at, c.paid_at) DESC
+         LIMIT 50`,
+        [entrepreneur.id]
+      );
+
+      const transactions = transactionsResult.rows.map(tx => ({
+        id: tx.id,
+        job_id: tx.job_id,
+        job_title: tx.job_title,
+        contract_amount: parseFloat(tx.contract_amount),
+        platform_fee: parseFloat(tx.platform_fee_amount),
+        platform_fee_percentage: parseFloat(tx.platform_fee_percentage),
+        amount: parseFloat(tx.amount),
+        status: tx.status,
+        payment_status: tx.payment_status,
+        paid_at: tx.paid_at,
+        payout_completed_at: tx.payout_completed_at,
+        date: tx.date,
+        manager_name: `${tx.manager_first_name} ${tx.manager_last_name}`
+      }));
+
+      // Format chart data
+      const monthlyChart = monthlyResult.rows.map(row => ({
+        label: row.month_label,
+        month: row.month,
+        earnings: parseFloat(row.earnings),
+        contracts: parseInt(row.contracts)
+      }));
+
+      const weeklyChart = weeklyResult.rows.map(row => ({
+        label: row.week_label,
+        week: row.week,
+        earnings: parseFloat(row.earnings),
+        contracts: parseInt(row.contracts)
+      }));
+
+      res.json({
+        // Summary stats
+        total_earnings: parseFloat(stats.total_earnings),
+        gross_earnings: parseFloat(stats.gross_earnings),
+        total_platform_fees: parseFloat(stats.total_platform_fees),
+        total_paid: parseFloat(stats.total_paid),
+        pending_amount: parseFloat(stats.pending_amount),
+        completed_contracts: parseInt(stats.completed_contracts),
+        total_contracts: parseInt(stats.total_contracts),
+        platform_fee_percentage: PLATFORM_FEE_PERCENTAGE,
+
+        // Chart data
+        monthly_chart: monthlyChart,
+        weekly_chart: weeklyChart,
+
+        // Transaction history
+        transactions
+      });
+
+    } catch (error) {
+      console.error('❌ Get payouts summary error:', error);
+      res.status(500).json({
+        error: 'Failed to get payouts summary',
+        message: error.message
+      });
+    }
+  },
+
+  /**
    * CHECK ENTREPRENEUR STRIPE STATUS (For Managers)
    * Allows managers to check if an entrepreneur can receive payments
    * GET /api/contracts/connect/entrepreneur-status/:entrepreneur_id
