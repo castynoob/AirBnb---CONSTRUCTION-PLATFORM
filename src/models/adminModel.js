@@ -2002,3 +2002,405 @@ export const addSubscriptionAdminNotes = async (subscriptionId, notes, adminId) 
 
   return result.rows[0] || null;
 };
+
+// ============================================
+// SUPPORT TICKET MANAGEMENT
+// ============================================
+
+// Get all support tickets (admin)
+export const getAllSupportTickets = async (limit = 50, offset = 0, filters = {}) => {
+  let query = `
+    SELECT
+      st.id,
+      st.ticket_number,
+      st.user_id,
+      st.subject,
+      st.description,
+      st.category,
+      st.priority,
+      st.status,
+      st.assigned_to,
+      st.created_at,
+      st.updated_at,
+      st.resolved_at,
+      u.first_name as user_first_name,
+      u.last_name as user_last_name,
+      u.email as user_email,
+      u.role as user_role,
+      (SELECT COUNT(*) FROM ticket_messages tm WHERE tm.ticket_id = st.id) as message_count
+    FROM support_tickets st
+    LEFT JOIN users u ON st.user_id = u.id
+    WHERE 1=1
+  `;
+  const params = [];
+  let paramIndex = 1;
+
+  if (filters.search) {
+    query += ` AND (
+      st.subject ILIKE $${paramIndex} OR
+      st.ticket_number ILIKE $${paramIndex} OR
+      u.email ILIKE $${paramIndex} OR
+      u.first_name ILIKE $${paramIndex} OR
+      u.last_name ILIKE $${paramIndex}
+    )`;
+    params.push(`%${filters.search}%`);
+    paramIndex++;
+  }
+
+  if (filters.status) {
+    query += ` AND st.status = $${paramIndex}`;
+    params.push(filters.status);
+    paramIndex++;
+  }
+
+  if (filters.priority) {
+    query += ` AND st.priority = $${paramIndex}`;
+    params.push(filters.priority);
+    paramIndex++;
+  }
+
+  if (filters.category) {
+    query += ` AND st.category = $${paramIndex}`;
+    params.push(filters.category);
+    paramIndex++;
+  }
+
+  // Count query
+  const countQuery = query.replace(
+    /SELECT[\s\S]*?FROM support_tickets/,
+    'SELECT COUNT(*) as total FROM support_tickets'
+  );
+  const countResult = await pool.query(countQuery, params);
+  const total = parseInt(countResult.rows[0]?.total || 0);
+
+  // Add sorting and pagination
+  query += ` ORDER BY st.created_at DESC LIMIT $${paramIndex} OFFSET $${paramIndex + 1}`;
+  params.push(limit, offset);
+
+  const result = await pool.query(query, params);
+
+  return {
+    tickets: result.rows,
+    pagination: {
+      total,
+      limit,
+      offset,
+      totalPages: Math.ceil(total / limit),
+    },
+  };
+};
+
+// Get support ticket by ID (admin)
+export const getSupportTicketById = async (ticketId) => {
+  const result = await pool.query(`
+    SELECT
+      st.*,
+      u.first_name as user_first_name,
+      u.last_name as user_last_name,
+      u.email as user_email,
+      u.role as user_role
+    FROM support_tickets st
+    LEFT JOIN users u ON st.user_id = u.id
+    WHERE st.id = $1
+  `, [ticketId]);
+
+  return result.rows[0] || null;
+};
+
+// Get ticket messages (admin - includes internal notes)
+export const getTicketMessagesAdmin = async (ticketId) => {
+  const result = await pool.query(`
+    SELECT
+      tm.id,
+      tm.message,
+      tm.sender_type,
+      tm.sender_id,
+      tm.is_internal,
+      tm.created_at
+    FROM ticket_messages tm
+    WHERE tm.ticket_id = $1
+    ORDER BY tm.created_at ASC
+  `, [ticketId]);
+
+  return result.rows;
+};
+
+// Add admin reply to ticket
+export const addAdminTicketMessage = async (ticketId, adminId, message, isInternal = false) => {
+  const result = await pool.query(`
+    INSERT INTO ticket_messages (ticket_id, sender_type, sender_id, message, is_internal)
+    VALUES ($1, 'admin', $2, $3, $4)
+    RETURNING *
+  `, [ticketId, adminId, message, isInternal]);
+
+  // Update ticket status if it's currently open
+  await pool.query(`
+    UPDATE support_tickets
+    SET
+      status = CASE WHEN status = 'open' THEN 'in_progress' ELSE status END,
+      updated_at = NOW()
+    WHERE id = $1
+  `, [ticketId]);
+
+  return result.rows[0];
+};
+
+// Update ticket status
+export const updateTicketStatus = async (ticketId, status, adminId) => {
+  const resolvedAt = status === 'resolved' ? 'NOW()' : 'NULL';
+
+  const result = await pool.query(`
+    UPDATE support_tickets
+    SET
+      status = $1,
+      assigned_to = COALESCE(assigned_to, $2),
+      resolved_at = ${status === 'resolved' ? 'NOW()' : 'resolved_at'},
+      updated_at = NOW()
+    WHERE id = $3
+    RETURNING *
+  `, [status, adminId, ticketId]);
+
+  return result.rows[0];
+};
+
+// ============================================
+// DISPUTE MANAGEMENT QUERIES
+// ============================================
+
+// Get all disputes with pagination and filters
+export const getAllDisputes = async (limit = 50, offset = 0, filters = {}) => {
+  let query = `
+    SELECT
+      d.id,
+      d.dispute_number,
+      d.job_id,
+      d.reporter_id,
+      d.reported_id,
+      d.type,
+      d.reason,
+      d.evidence,
+      d.status,
+      d.priority,
+      d.resolution,
+      d.resolution_type,
+      d.resolved_by,
+      d.resolved_at,
+      d.admin_notes,
+      d.created_at,
+      d.updated_at,
+      j.title as job_title,
+      j.status as job_status,
+      reporter.first_name as reporter_first_name,
+      reporter.last_name as reporter_last_name,
+      reporter.email as reporter_email,
+      reporter.role as reporter_role,
+      reported.first_name as reported_first_name,
+      reported.last_name as reported_last_name,
+      reported.email as reported_email,
+      reported.role as reported_role,
+      resolver.name as resolved_by_name
+    FROM disputes d
+    LEFT JOIN jobs j ON d.job_id = j.id
+    LEFT JOIN users reporter ON d.reporter_id = reporter.id
+    LEFT JOIN users reported ON d.reported_id = reported.id
+    LEFT JOIN admin_users resolver ON d.resolved_by = resolver.id
+    WHERE 1=1
+  `;
+  const params = [];
+  let paramIndex = 1;
+
+  if (filters.search) {
+    query += ` AND (
+      d.reason ILIKE $${paramIndex} OR
+      CAST(d.dispute_number AS TEXT) ILIKE $${paramIndex} OR
+      j.title ILIKE $${paramIndex} OR
+      reporter.email ILIKE $${paramIndex} OR
+      reported.email ILIKE $${paramIndex} OR
+      reporter.first_name ILIKE $${paramIndex} OR
+      reporter.last_name ILIKE $${paramIndex} OR
+      reported.first_name ILIKE $${paramIndex} OR
+      reported.last_name ILIKE $${paramIndex}
+    )`;
+    params.push(`%${filters.search}%`);
+    paramIndex++;
+  }
+
+  if (filters.status) {
+    query += ` AND d.status = $${paramIndex}`;
+    params.push(filters.status);
+    paramIndex++;
+  }
+
+  if (filters.type) {
+    query += ` AND d.type = $${paramIndex}`;
+    params.push(filters.type);
+    paramIndex++;
+  }
+
+  if (filters.priority) {
+    query += ` AND d.priority = $${paramIndex}`;
+    params.push(filters.priority);
+    paramIndex++;
+  }
+
+  // Count query
+  const countQuery = query.replace(
+    /SELECT[\s\S]*?FROM disputes/,
+    'SELECT COUNT(*) as total FROM disputes'
+  );
+  const countResult = await pool.query(countQuery, params);
+  const total = parseInt(countResult.rows[0]?.total || 0);
+
+  // Add sorting and pagination
+  query += ` ORDER BY d.created_at DESC LIMIT $${paramIndex} OFFSET $${paramIndex + 1}`;
+  params.push(limit, offset);
+
+  const result = await pool.query(query, params);
+
+  return {
+    disputes: result.rows,
+    pagination: {
+      total,
+      limit,
+      offset,
+      totalPages: Math.ceil(total / limit),
+    },
+  };
+};
+
+// Get dispute by ID with full details
+export const getDisputeById = async (disputeId) => {
+  const result = await pool.query(`
+    SELECT
+      d.*,
+      j.title as job_title,
+      j.description as job_description,
+      j.status as job_status,
+      j.category as job_category,
+      j.budget_min,
+      j.budget_max,
+      reporter.first_name as reporter_first_name,
+      reporter.last_name as reporter_last_name,
+      reporter.email as reporter_email,
+      reporter.role as reporter_role,
+      reporter.phone as reporter_phone,
+      reported.first_name as reported_first_name,
+      reported.last_name as reported_last_name,
+      reported.email as reported_email,
+      reported.role as reported_role,
+      reported.phone as reported_phone,
+      resolver.name as resolved_by_name,
+      resolver.email as resolved_by_email
+    FROM disputes d
+    LEFT JOIN jobs j ON d.job_id = j.id
+    LEFT JOIN users reporter ON d.reporter_id = reporter.id
+    LEFT JOIN users reported ON d.reported_id = reported.id
+    LEFT JOIN admin_users resolver ON d.resolved_by = resolver.id
+    WHERE d.id = $1
+  `, [disputeId]);
+
+  return result.rows[0] || null;
+};
+
+// Get dispute statistics
+export const getDisputeStats = async () => {
+  const result = await pool.query(`
+    SELECT
+      COUNT(*) as total_disputes,
+      COUNT(*) FILTER (WHERE status = 'open') as open_disputes,
+      COUNT(*) FILTER (WHERE status = 'under_review') as under_review_disputes,
+      COUNT(*) FILTER (WHERE status = 'resolved') as resolved_disputes,
+      COUNT(*) FILTER (WHERE status = 'closed') as closed_disputes,
+      COUNT(*) FILTER (WHERE status = 'escalated') as escalated_disputes,
+      COUNT(*) FILTER (WHERE priority = 'urgent') as urgent_disputes,
+      COUNT(*) FILTER (WHERE priority = 'high') as high_priority_disputes,
+      COUNT(*) FILTER (WHERE created_at >= DATE_TRUNC('month', NOW())) as this_month,
+      COUNT(*) FILTER (WHERE resolved_at >= DATE_TRUNC('month', NOW())) as resolved_this_month
+    FROM disputes
+  `);
+
+  return result.rows[0];
+};
+
+// Update dispute status
+export const updateDisputeStatus = async (disputeId, status, adminId) => {
+  const result = await pool.query(`
+    UPDATE disputes
+    SET
+      status = $1,
+      updated_at = NOW()
+    WHERE id = $2
+    RETURNING *
+  `, [status, disputeId]);
+
+  return result.rows[0];
+};
+
+// Resolve dispute
+export const resolveDispute = async (disputeId, resolution, resolutionType, adminId) => {
+  const result = await pool.query(`
+    UPDATE disputes
+    SET
+      status = 'resolved',
+      resolution = $1,
+      resolution_type = $2,
+      resolved_by = $3,
+      resolved_at = NOW(),
+      updated_at = NOW()
+    WHERE id = $4
+    RETURNING *
+  `, [resolution, resolutionType, adminId, disputeId]);
+
+  return result.rows[0];
+};
+
+// Add admin notes to dispute
+export const addDisputeAdminNotes = async (disputeId, notes) => {
+  const result = await pool.query(`
+    UPDATE disputes
+    SET
+      admin_notes = $1,
+      updated_at = NOW()
+    WHERE id = $2
+    RETURNING *
+  `, [notes, disputeId]);
+
+  return result.rows[0];
+};
+
+// Update dispute priority
+export const updateDisputePriority = async (disputeId, priority) => {
+  const result = await pool.query(`
+    UPDATE disputes
+    SET
+      priority = $1,
+      updated_at = NOW()
+    WHERE id = $2
+    RETURNING *
+  `, [priority, disputeId]);
+
+  return result.rows[0];
+};
+
+// Escalate dispute
+export const escalateDispute = async (disputeId, adminId) => {
+  const result = await pool.query(`
+    UPDATE disputes
+    SET
+      status = 'escalated',
+      priority = 'urgent',
+      updated_at = NOW()
+    WHERE id = $1
+    RETURNING *
+  `, [disputeId]);
+
+  return result.rows[0];
+};
+
+// Get dispute types for filter dropdown
+export const getDisputeTypes = async () => {
+  const result = await pool.query(`
+    SELECT DISTINCT type FROM disputes WHERE type IS NOT NULL ORDER BY type
+  `);
+  return result.rows.map(r => r.type);
+};

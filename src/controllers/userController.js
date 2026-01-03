@@ -67,13 +67,19 @@ export const getEntrepreneurProfileById = async (req, res) => {
   try {
     const entrepreneurId = req.params.id;
 
-    // Fetch entrepreneur profile by its ID
+    // Fetch entrepreneur profile by its ID with user data
     const entrepreneur = await pool.query(
-      `SELECT ep.*, 
-              u.email, 
-              u.first_name, 
-              u.last_name, 
-              u.role 
+      `SELECT
+        ep.*,
+        u.id as user_id,
+        u.email,
+        u.first_name,
+        u.last_name,
+        u.phone,
+        u.profile_picture,
+        u.role,
+        (SELECT COALESCE(AVG(r.rating), 0) FROM reviews r WHERE r.reviewed_user_id = u.id) as average_rating,
+        (SELECT COUNT(*) FROM reviews r WHERE r.reviewed_user_id = u.id) as total_reviews
        FROM entrepreneur_profiles ep
        JOIN users u ON ep.user_id = u.id
        WHERE ep.id = $1`,
@@ -84,9 +90,15 @@ export const getEntrepreneurProfileById = async (req, res) => {
       return res.status(404).json({ message: "Entrepreneur profile not found" });
     }
 
+    // Return the profile with user_id as the main id for reviews
+    const profile = entrepreneur.rows[0];
     res.status(200).json({
       message: "Entrepreneur profile fetched successfully",
-      profile: entrepreneur.rows[0],
+      profile: {
+        ...profile,
+        id: profile.user_id, // Use user_id as the main id for reviews
+        profile_id: profile.id // Keep original profile id if needed
+      },
     });
   } catch (error) {
     console.error("Error fetching entrepreneur profile by ID:", error);
@@ -116,13 +128,20 @@ export const getManagerProfileByUserId = async (req, res) => {
       });
     }
 
-    // Fetch the manager profile (assuming you have `manager_profiles` table)
+    // Fetch the manager profile with full user data
     const manager = await pool.query(
-      `SELECT mp.*, 
-              u.email, 
-              u.first_name, 
-              u.last_name, 
-              u.role 
+      `SELECT
+        mp.*,
+        u.id as user_id,
+        u.email,
+        u.first_name,
+        u.last_name,
+        u.phone,
+        u.profile_picture,
+        u.role,
+        (SELECT COUNT(*) FROM properties WHERE manager_id = mp.id) as total_properties,
+        (SELECT COALESCE(AVG(r.rating), 0) FROM reviews r WHERE r.reviewed_user_id = u.id) as average_rating,
+        (SELECT COUNT(*) FROM reviews r WHERE r.reviewed_user_id = u.id) as total_reviews
        FROM manager_profiles mp
        JOIN users u ON mp.user_id = u.id
        WHERE mp.user_id = $1`,
@@ -135,9 +154,15 @@ export const getManagerProfileByUserId = async (req, res) => {
         .json({ message: "Manager profile not found" });
     }
 
+    // Return the profile with user_id as the main id for reviews
+    const profile = manager.rows[0];
     res.status(200).json({
       message: "Manager profile fetched successfully",
-      profile: manager.rows[0],
+      profile: {
+        ...profile,
+        id: profile.user_id, // Use user_id as the main id for reviews
+        profile_id: profile.id // Keep original profile id if needed
+      },
     });
   } catch (error) {
     console.error("Error fetching manager profile by user ID:", error);
@@ -167,13 +192,19 @@ export const getEntrepreneurProfileByUserId = async (req, res) => {
       });
     }
 
-    // Fetch entrepreneur profile by the user_id
+    // Fetch entrepreneur profile by the user_id with full user data
     const entrepreneur = await pool.query(
-      `SELECT ep.*, 
-              u.email, 
-              u.first_name, 
-              u.last_name, 
-              u.role 
+      `SELECT
+        ep.*,
+        u.id as user_id,
+        u.email,
+        u.first_name,
+        u.last_name,
+        u.phone,
+        u.profile_picture,
+        u.role,
+        (SELECT COALESCE(AVG(r.rating), 0) FROM reviews r WHERE r.reviewed_user_id = u.id) as average_rating,
+        (SELECT COUNT(*) FROM reviews r WHERE r.reviewed_user_id = u.id) as total_reviews
        FROM entrepreneur_profiles ep
        JOIN users u ON ep.user_id = u.id
        WHERE ep.user_id = $1`,
@@ -186,9 +217,15 @@ export const getEntrepreneurProfileByUserId = async (req, res) => {
         .json({ message: "Entrepreneur profile not found for this user" });
     }
 
+    // Return the profile with user_id as the main id for reviews
+    const profile = entrepreneur.rows[0];
     res.status(200).json({
       message: "Entrepreneur profile fetched successfully by user ID",
-      profile: entrepreneur.rows[0],
+      profile: {
+        ...profile,
+        id: profile.user_id, // Use user_id as the main id for reviews
+        profile_id: profile.id // Keep original profile id if needed
+      },
     });
   } catch (error) {
     console.error("Error fetching entrepreneur profile by user ID:", error);
@@ -202,9 +239,20 @@ export const getManagerProfileById = async (req, res) => {
     console.log(managerId)
 
     const result = await pool.query(
-      `SELECT *
-       FROM manager_profiles
-       WHERE id = $1`,
+      `SELECT
+        mp.*,
+        u.id as user_id,
+        u.first_name,
+        u.last_name,
+        u.email,
+        u.phone,
+        u.profile_picture,
+        (SELECT COUNT(*) FROM properties WHERE manager_id = mp.id) as total_properties,
+        (SELECT COALESCE(AVG(r.rating), 0) FROM reviews r WHERE r.reviewed_user_id = u.id) as average_rating,
+        (SELECT COUNT(*) FROM reviews r WHERE r.reviewed_user_id = u.id) as total_reviews
+       FROM manager_profiles mp
+       JOIN users u ON mp.user_id = u.id
+       WHERE mp.id = $1`,
       [managerId]
     );
 
@@ -212,9 +260,15 @@ export const getManagerProfileById = async (req, res) => {
       return res.status(404).json({ message: "Manager profile not found" });
     }
 
+    // Return the profile with user_id for reviews lookup
+    const profile = result.rows[0];
     res.status(200).json({
       message: "Manager profile fetched successfully",
-      profile: result.rows[0],
+      profile: {
+        ...profile,
+        id: profile.user_id, // Use user_id as the main id for reviews
+        profile_id: profile.id // Keep original profile id if needed
+      },
     });
   } catch (error) {
     console.error("Error fetching manager by id:", error);
@@ -709,13 +763,16 @@ export const getSupplierProfileById = async (req, res) => {
 
     const result = await pool.query(
       `SELECT sp.*,
+              u.id as user_id,
               u.email,
               u.first_name,
               u.middle_name,
               u.last_name,
               u.phone as user_phone,
               u.profile_picture,
-              u.role
+              u.role,
+              (SELECT COALESCE(AVG(r.rating), 0) FROM reviews r WHERE r.reviewed_user_id = u.id) as average_rating,
+              (SELECT COUNT(*) FROM reviews r WHERE r.reviewed_user_id = u.id) as total_reviews
        FROM supplier_profiles sp
        JOIN users u ON sp.user_id = u.id
        WHERE sp.id = $1`,
@@ -726,9 +783,15 @@ export const getSupplierProfileById = async (req, res) => {
       return res.status(404).json({ message: "Supplier profile not found" });
     }
 
+    // Return the profile with user_id as the main id for reviews
+    const profile = result.rows[0];
     res.status(200).json({
       message: "Supplier profile fetched successfully",
-      profile: result.rows[0],
+      profile: {
+        ...profile,
+        id: profile.user_id, // Use user_id as the main id for reviews
+        profile_id: profile.id // Keep original profile id if needed
+      },
     });
   } catch (error) {
     console.error("Error fetching supplier by id:", error);

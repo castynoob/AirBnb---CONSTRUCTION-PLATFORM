@@ -40,10 +40,20 @@ router.post('/unlock-budget',
     PaymentController.unlockBudget
 );
 
-router.get('/budget-status/:job_id', 
+router.get('/budget-status/:job_id',
     authenticateToken,
     requireEntrepreneur,
     PaymentController.checkBudgetUnlock
+);
+
+// ============================================
+// BILLING HISTORY ROUTE
+// ============================================
+
+router.get('/billing-history',
+    authenticateToken,
+    requireEntrepreneur,
+    PaymentController.getBillingHistory
 );
 
 // ============================================

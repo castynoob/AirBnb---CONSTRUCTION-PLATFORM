@@ -483,6 +483,128 @@ const PaymentController = {
         }
     },
 
+    /**
+     * GET BILLING HISTORY
+     * GET /api/payments/billing-history
+     * Returns subscription payments and budget unlock payments for the user
+     */
+    async getBillingHistory(req, res) {
+        try {
+            const user_id = req.user.id;
+
+            // Get entrepreneur profile ID
+            const entrepreneurQuery = await db.query(
+                'SELECT id FROM entrepreneur_profiles WHERE user_id = $1',
+                [user_id]
+            );
+
+            if (entrepreneurQuery.rows.length === 0) {
+                return res.status(403).json({
+                    error: 'Entrepreneur account required',
+                    message: 'Only entrepreneurs can view billing history'
+                });
+            }
+
+            const entrepreneur_id = entrepreneurQuery.rows[0].id;
+
+            // Get subscription history
+            const subscriptionQuery = await db.query(
+                `SELECT
+                    s.id,
+                    s.plan_type,
+                    s.status,
+                    s.created_at,
+                    s.current_period_start,
+                    s.current_period_end,
+                    s.stripe_subscription_id,
+                    CASE
+                        WHEN s.plan_type = 'premium' THEN 429.00
+                        WHEN s.plan_type = 'basic' THEN 250.00
+                        ELSE 0
+                    END as amount,
+                    'subscription' as payment_type
+                FROM subscriptions s
+                WHERE s.user_id = $1
+                ORDER BY s.created_at DESC`,
+                [user_id]
+            );
+
+            // Get budget unlock history with job details
+            const budgetUnlocksQuery = await db.query(
+                `SELECT
+                    bu.id,
+                    bu.amount,
+                    bu.status,
+                    bu.unlocked_at,
+                    bu.created_at,
+                    bu.stripe_payment_intent_id,
+                    j.title as job_title,
+                    j.category as job_category,
+                    'budget_unlock' as payment_type
+                FROM budget_unlocks bu
+                JOIN jobs j ON bu.job_id = j.id
+                WHERE bu.entrepreneur_id = $1
+                ORDER BY bu.created_at DESC`,
+                [entrepreneur_id]
+            );
+
+            // Format subscription payments
+            const subscriptionPayments = subscriptionQuery.rows.map(sub => ({
+                id: sub.id,
+                type: 'subscription',
+                description: `${sub.plan_type === 'premium' ? 'Premium' : 'Basic'} Plan Subscription`,
+                amount: parseFloat(sub.amount),
+                status: sub.status,
+                date: sub.created_at,
+                period_start: sub.current_period_start,
+                period_end: sub.current_period_end,
+                stripe_id: sub.stripe_subscription_id
+            }));
+
+            // Format budget unlock payments - Budget unlock costs $20 USD
+            const BUDGET_UNLOCK_COST = 20.00;
+            const budgetUnlockPayments = budgetUnlocksQuery.rows.map(unlock => ({
+                id: unlock.id,
+                type: 'budget_unlock',
+                description: `Budget Unlock: ${unlock.job_title}`,
+                job_title: unlock.job_title,
+                job_category: unlock.job_category,
+                amount: BUDGET_UNLOCK_COST,
+                status: unlock.status,
+                date: unlock.unlocked_at || unlock.created_at,
+                stripe_id: unlock.stripe_payment_intent_id
+            }));
+
+            // Combine and sort by date (newest first)
+            const allPayments = [...subscriptionPayments, ...budgetUnlockPayments]
+                .sort((a, b) => new Date(b.date) - new Date(a.date));
+
+            // Calculate totals
+            const totalSubscriptionSpent = subscriptionPayments
+                .filter(p => p.status === 'active' || p.status === 'trialing')
+                .reduce((sum, p) => sum + p.amount, 0);
+
+            const totalBudgetUnlockSpent = budgetUnlockPayments
+                .filter(p => p.status === 'succeeded')
+                .length * BUDGET_UNLOCK_COST;
+
+            res.json({
+                payments: allPayments,
+                summary: {
+                    total_subscription_payments: subscriptionPayments.length,
+                    total_budget_unlocks: budgetUnlockPayments.length,
+                    total_spent: totalSubscriptionSpent + totalBudgetUnlockSpent,
+                    subscription_spent: totalSubscriptionSpent,
+                    budget_unlock_spent: totalBudgetUnlockSpent
+                }
+            });
+
+        } catch (error) {
+            console.error('❌ Get billing history error:', error);
+            res.status(500).json({ error: error.message });
+        }
+    },
+
     async handleWebhook(req, res) {
         const sig = req.headers['stripe-signature'];
         const webhookSecret = process.env.STRIPE_WEBHOOK_SECRET;

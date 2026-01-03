@@ -61,6 +61,20 @@ import {
   cancelSubscription,
   reactivateSubscription,
   changeSubscriptionPlan,
+  getAllSupportTickets,
+  getSupportTicketById,
+  getTicketMessagesAdmin,
+  addAdminTicketMessage,
+  updateTicketStatus,
+  getAllDisputes,
+  getDisputeById,
+  getDisputeStats,
+  updateDisputeStatus,
+  resolveDispute,
+  addDisputeAdminNotes,
+  updateDisputePriority,
+  escalateDispute,
+  getDisputeTypes,
 } from "../models/adminModel.js";
 import { getUserActivityLogs } from "../models/userActivityModel.js";
 import {
@@ -1413,6 +1427,361 @@ export const changePlanHandler = async (req, res) => {
     res.json({ message: `Plan changed to ${planType}`, subscription });
   } catch (err) {
     console.error("Change plan error:", err);
+    res.status(500).json({ message: "Server error" });
+  }
+};
+
+// ============================================
+// SUPPORT TICKET MANAGEMENT
+// ============================================
+
+// Get all support tickets
+export const getSupportTicketsHandler = async (req, res) => {
+  try {
+    const { page = 1, limit = 10, search, status, priority, category } = req.query;
+    const offset = (parseInt(page) - 1) * parseInt(limit);
+
+    const result = await getAllSupportTickets(parseInt(limit), offset, {
+      search,
+      status,
+      priority,
+      category,
+    });
+
+    res.json({
+      tickets: result.tickets,
+      pagination: {
+        ...result.pagination,
+        page: parseInt(page),
+      },
+    });
+  } catch (err) {
+    console.error("Get support tickets error:", err);
+    res.status(500).json({ message: "Server error" });
+  }
+};
+
+// Get single support ticket
+export const getSupportTicketHandler = async (req, res) => {
+  try {
+    const { id } = req.params;
+    const ticket = await getSupportTicketById(id);
+
+    if (!ticket) {
+      return res.status(404).json({ message: "Ticket not found" });
+    }
+
+    res.json({ ticket });
+  } catch (err) {
+    console.error("Get support ticket error:", err);
+    res.status(500).json({ message: "Server error" });
+  }
+};
+
+// Get ticket messages
+export const getTicketMessagesHandler = async (req, res) => {
+  try {
+    const { id } = req.params;
+    const messages = await getTicketMessagesAdmin(id);
+
+    res.json({ messages });
+  } catch (err) {
+    console.error("Get ticket messages error:", err);
+    res.status(500).json({ message: "Server error" });
+  }
+};
+
+// Add admin reply to ticket
+export const addTicketMessageHandler = async (req, res) => {
+  try {
+    const { id } = req.params;
+    const { message, isInternal = false } = req.body;
+
+    if (!message || !message.trim()) {
+      return res.status(400).json({ message: "Message is required" });
+    }
+
+    const ticketMessage = await addAdminTicketMessage(id, req.admin.id, message.trim(), isInternal);
+
+    // Create audit log
+    await createAuditLog(
+      req.admin.id,
+      "reply_ticket",
+      "support_ticket",
+      id,
+      { is_internal: isInternal }
+    );
+
+    res.status(201).json({ message: "Reply sent", ticketMessage });
+  } catch (err) {
+    console.error("Add ticket message error:", err);
+    res.status(500).json({ message: "Server error" });
+  }
+};
+
+// Update ticket status
+export const updateTicketStatusHandler = async (req, res) => {
+  try {
+    const { id } = req.params;
+    const { status } = req.body;
+
+    const validStatuses = ['open', 'in_progress', 'waiting_on_user', 'resolved', 'closed'];
+    if (!validStatuses.includes(status)) {
+      return res.status(400).json({ message: "Invalid status" });
+    }
+
+    const ticket = await updateTicketStatus(id, status, req.admin.id);
+
+    if (!ticket) {
+      return res.status(404).json({ message: "Ticket not found" });
+    }
+
+    // Create audit log
+    await createAuditLog(
+      req.admin.id,
+      "update_ticket_status",
+      "support_ticket",
+      id,
+      { new_status: status }
+    );
+
+    res.json({ message: "Status updated", ticket });
+  } catch (err) {
+    console.error("Update ticket status error:", err);
+    res.status(500).json({ message: "Server error" });
+  }
+};
+
+// ============================================
+// DISPUTE MANAGEMENT
+// ============================================
+
+// Get all disputes
+export const getDisputesHandler = async (req, res) => {
+  try {
+    const { page = 1, limit = 10, search, status, type, priority } = req.query;
+    const offset = (parseInt(page) - 1) * parseInt(limit);
+
+    const result = await getAllDisputes(parseInt(limit), offset, {
+      search,
+      status,
+      type,
+      priority,
+    });
+
+    res.json({
+      disputes: result.disputes,
+      pagination: {
+        ...result.pagination,
+        page: parseInt(page),
+      },
+    });
+  } catch (err) {
+    console.error("Get disputes error:", err);
+    res.status(500).json({ message: "Server error" });
+  }
+};
+
+// Get single dispute
+export const getDisputeHandler = async (req, res) => {
+  try {
+    const { id } = req.params;
+    const dispute = await getDisputeById(id);
+
+    if (!dispute) {
+      return res.status(404).json({ message: "Dispute not found" });
+    }
+
+    res.json({ dispute });
+  } catch (err) {
+    console.error("Get dispute error:", err);
+    res.status(500).json({ message: "Server error" });
+  }
+};
+
+// Get dispute stats
+export const getDisputeStatsHandler = async (req, res) => {
+  try {
+    const stats = await getDisputeStats();
+    res.json({ stats });
+  } catch (err) {
+    console.error("Get dispute stats error:", err);
+    res.status(500).json({ message: "Server error" });
+  }
+};
+
+// Get dispute types for filter
+export const getDisputeTypesHandler = async (req, res) => {
+  try {
+    const types = await getDisputeTypes();
+    res.json({ types });
+  } catch (err) {
+    console.error("Get dispute types error:", err);
+    res.status(500).json({ message: "Server error" });
+  }
+};
+
+// Update dispute status
+export const updateDisputeStatusHandler = async (req, res) => {
+  try {
+    const { id } = req.params;
+    const { status } = req.body;
+
+    const validStatuses = ['open', 'under_review', 'resolved', 'closed', 'escalated'];
+    if (!validStatuses.includes(status)) {
+      return res.status(400).json({ message: "Invalid status" });
+    }
+
+    const dispute = await updateDisputeStatus(id, status, req.admin.id);
+
+    if (!dispute) {
+      return res.status(404).json({ message: "Dispute not found" });
+    }
+
+    // Create audit log
+    await createAuditLog(
+      req.admin.id,
+      "update_dispute_status",
+      "dispute",
+      id,
+      { new_status: status }
+    );
+
+    res.json({ message: "Status updated", dispute });
+  } catch (err) {
+    console.error("Update dispute status error:", err);
+    res.status(500).json({ message: "Server error" });
+  }
+};
+
+// Resolve dispute
+export const resolveDisputeHandler = async (req, res) => {
+  try {
+    const { id } = req.params;
+    const { resolution, resolutionType } = req.body;
+
+    if (!resolution || !resolutionType) {
+      return res.status(400).json({ message: "Resolution and resolution type are required" });
+    }
+
+    const validResolutionTypes = [
+      'side_with_reporter',
+      'side_with_reported',
+      'mutual_resolution',
+      'escalated',
+      'refund_issued',
+      'user_suspended'
+    ];
+    if (!validResolutionTypes.includes(resolutionType)) {
+      return res.status(400).json({ message: "Invalid resolution type" });
+    }
+
+    const dispute = await resolveDispute(id, resolution, resolutionType, req.admin.id);
+
+    if (!dispute) {
+      return res.status(404).json({ message: "Dispute not found" });
+    }
+
+    // Create audit log
+    await createAuditLog(
+      req.admin.id,
+      "resolve_dispute",
+      "dispute",
+      id,
+      { resolution_type: resolutionType }
+    );
+
+    res.json({ message: "Dispute resolved", dispute });
+  } catch (err) {
+    console.error("Resolve dispute error:", err);
+    res.status(500).json({ message: "Server error" });
+  }
+};
+
+// Add admin notes to dispute
+export const addDisputeNotesHandler = async (req, res) => {
+  try {
+    const { id } = req.params;
+    const { notes } = req.body;
+
+    const dispute = await addDisputeAdminNotes(id, notes);
+
+    if (!dispute) {
+      return res.status(404).json({ message: "Dispute not found" });
+    }
+
+    // Create audit log
+    await createAuditLog(
+      req.admin.id,
+      "add_dispute_notes",
+      "dispute",
+      id,
+      {}
+    );
+
+    res.json({ message: "Notes updated", dispute });
+  } catch (err) {
+    console.error("Add dispute notes error:", err);
+    res.status(500).json({ message: "Server error" });
+  }
+};
+
+// Update dispute priority
+export const updateDisputePriorityHandler = async (req, res) => {
+  try {
+    const { id } = req.params;
+    const { priority } = req.body;
+
+    const validPriorities = ['low', 'medium', 'high', 'urgent'];
+    if (!validPriorities.includes(priority)) {
+      return res.status(400).json({ message: "Invalid priority" });
+    }
+
+    const dispute = await updateDisputePriority(id, priority);
+
+    if (!dispute) {
+      return res.status(404).json({ message: "Dispute not found" });
+    }
+
+    // Create audit log
+    await createAuditLog(
+      req.admin.id,
+      "update_dispute_priority",
+      "dispute",
+      id,
+      { new_priority: priority }
+    );
+
+    res.json({ message: "Priority updated", dispute });
+  } catch (err) {
+    console.error("Update dispute priority error:", err);
+    res.status(500).json({ message: "Server error" });
+  }
+};
+
+// Escalate dispute
+export const escalateDisputeHandler = async (req, res) => {
+  try {
+    const { id } = req.params;
+
+    const dispute = await escalateDispute(id, req.admin.id);
+
+    if (!dispute) {
+      return res.status(404).json({ message: "Dispute not found" });
+    }
+
+    // Create audit log
+    await createAuditLog(
+      req.admin.id,
+      "escalate_dispute",
+      "dispute",
+      id,
+      {}
+    );
+
+    res.json({ message: "Dispute escalated", dispute });
+  } catch (err) {
+    console.error("Escalate dispute error:", err);
     res.status(500).json({ message: "Server error" });
   }
 };

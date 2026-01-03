@@ -128,19 +128,19 @@ export const updateJob = async (req, res) => {
         const io = getIO();
         if (io) {
           // Get job details with property and users info
+          // NOTE: jobs.entrepreneur_id stores USER ID (not entrepreneur_profiles.id)
           const jobDetails = await pool.query(
             `SELECT j.title, j.manager_id, j.entrepreneur_id,
                     p.building_name,
                     mu.id as manager_user_id,
-                    eu.id as entrepreneur_user_id,
+                    j.entrepreneur_id as entrepreneur_user_id,
                     eu.first_name as entrepreneur_first_name,
                     eu.last_name as entrepreneur_last_name
              FROM jobs j
-             LEFT JOIN properties p ON j.property_id = p.id
+             LEFT JOIN properties p ON j.property_id::uuid = p.id
              LEFT JOIN manager_profiles mp ON j.manager_id = mp.id
              LEFT JOIN users mu ON mp.user_id = mu.id
-             LEFT JOIN entrepreneur_profiles ep ON j.entrepreneur_id = ep.id
-             LEFT JOIN users eu ON ep.user_id = eu.id
+             LEFT JOIN users eu ON j.entrepreneur_id::uuid = eu.id
              WHERE j.id = $1`,
             [jobId]
           );
@@ -286,6 +286,7 @@ export const getJobsByEntrepreneurId = async (req, res) => {
   try {
     const { entrepreneur_id } = req.params;
 
+    // NOTE: manager_id is UUID, entrepreneur_id is TEXT in jobs table
     const result = await pool.query(
       `
       SELECT j.*,
@@ -300,8 +301,8 @@ export const getJobsByEntrepreneurId = async (req, res) => {
              b.status as bid_status,
              b.created_at as bid_submitted_at
       FROM jobs j
-      LEFT JOIN manager_profiles mp ON j.manager_id::uuid = mp.id::uuid
-      LEFT JOIN properties p ON j.property_id::uuid = p.id::uuid
+      LEFT JOIN manager_profiles mp ON j.manager_id = mp.id
+      LEFT JOIN properties p ON j.property_id::uuid = p.id
       LEFT JOIN bids b ON j.id::text = b.job_id::text AND b.entrepreneur_id::text = $1
       WHERE j.entrepreneur_id = $1
       ORDER BY j.created_at DESC

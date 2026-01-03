@@ -50,6 +50,20 @@ import {
   cancelSubscriptionHandler,
   reactivateSubscriptionHandler,
   changePlanHandler,
+  getSupportTicketsHandler,
+  getSupportTicketHandler,
+  getTicketMessagesHandler,
+  addTicketMessageHandler,
+  updateTicketStatusHandler,
+  getDisputesHandler,
+  getDisputeHandler,
+  getDisputeStatsHandler,
+  getDisputeTypesHandler,
+  updateDisputeStatusHandler,
+  resolveDisputeHandler,
+  addDisputeNotesHandler,
+  updateDisputePriorityHandler,
+  escalateDisputeHandler,
 } from "../controllers/adminController.js";
 import {
   authenticateAdmin,
@@ -135,5 +149,23 @@ router.post("/subscriptions/:id/end-trial", authenticateAdmin, isAdminOrHigher, 
 router.post("/subscriptions/:id/cancel", authenticateAdmin, isAdminOrHigher, cancelSubscriptionHandler);
 router.post("/subscriptions/:id/reactivate", authenticateAdmin, isAdminOrHigher, reactivateSubscriptionHandler);
 router.post("/subscriptions/:id/change-plan", authenticateAdmin, isAdminOrHigher, changePlanHandler);
+
+// Support Ticket Management
+router.get("/support/tickets", authenticateAdmin, isModeratorOrHigher, getSupportTicketsHandler);
+router.get("/support/tickets/:id", authenticateAdmin, isModeratorOrHigher, getSupportTicketHandler);
+router.get("/support/tickets/:id/messages", authenticateAdmin, isModeratorOrHigher, getTicketMessagesHandler);
+router.post("/support/tickets/:id/messages", authenticateAdmin, isModeratorOrHigher, addTicketMessageHandler);
+router.patch("/support/tickets/:id/status", authenticateAdmin, isModeratorOrHigher, updateTicketStatusHandler);
+
+// Dispute Management
+router.get("/disputes", authenticateAdmin, isModeratorOrHigher, getDisputesHandler);
+router.get("/disputes/stats", authenticateAdmin, isModeratorOrHigher, getDisputeStatsHandler);
+router.get("/disputes/types", authenticateAdmin, isModeratorOrHigher, getDisputeTypesHandler);
+router.get("/disputes/:id", authenticateAdmin, isModeratorOrHigher, getDisputeHandler);
+router.patch("/disputes/:id/status", authenticateAdmin, isModeratorOrHigher, updateDisputeStatusHandler);
+router.post("/disputes/:id/resolve", authenticateAdmin, isModeratorOrHigher, resolveDisputeHandler);
+router.post("/disputes/:id/notes", authenticateAdmin, isModeratorOrHigher, addDisputeNotesHandler);
+router.patch("/disputes/:id/priority", authenticateAdmin, isModeratorOrHigher, updateDisputePriorityHandler);
+router.post("/disputes/:id/escalate", authenticateAdmin, isAdminOrHigher, escalateDisputeHandler);
 
 export default router;

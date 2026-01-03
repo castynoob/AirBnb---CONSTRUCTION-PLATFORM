@@ -29,14 +29,14 @@ export const addReview = async (req, res) => {
     }
 
     // Verify the job exists and is completed
+    // NOTE: jobs.entrepreneur_id stores USER ID (not entrepreneur_profiles.id)
     const jobCheck = await pool.query(
       `SELECT j.id, j.status, j.manager_id, j.entrepreneur_id,
-              ep.user_id as entrepreneur_user_id,
+              j.entrepreneur_id as entrepreneur_user_id,
               mp.user_id as manager_user_id
        FROM jobs j
-       LEFT JOIN entrepreneur_profiles ep ON j.entrepreneur_id::uuid = ep.id::uuid
-       LEFT JOIN manager_profiles mp ON j.manager_id::uuid = mp.id::uuid
-       WHERE j.id = $1::uuid`,
+       LEFT JOIN manager_profiles mp ON j.manager_id = mp.id
+       WHERE j.id = $1`,
       [job_id]
     );
 
@@ -45,14 +45,6 @@ export const addReview = async (req, res) => {
     }
 
     const job = jobCheck.rows[0];
-
-    // Debug logging
-    console.log('🔍 Review Authorization Debug:');
-    console.log('- Reviewer ID (from token):', reviewer_id, typeof reviewer_id);
-    console.log('- Job Manager Profile ID:', job.manager_id, typeof job.manager_id);
-    console.log('- Job Manager User ID:', job.manager_user_id, typeof job.manager_user_id);
-    console.log('- Job Entrepreneur User ID:', job.entrepreneur_user_id, typeof job.entrepreneur_user_id);
-    console.log('- Job Status:', job.status);
 
     if (job.status !== 'completed') {
       return res.status(400).json({
@@ -65,25 +57,14 @@ export const addReview = async (req, res) => {
     const isManager = String(job.manager_user_id) === String(reviewer_id);
     const isEntrepreneur = String(job.entrepreneur_user_id) === String(reviewer_id);
 
-    console.log('- Is Manager:', isManager);
-    console.log('- Is Entrepreneur:', isEntrepreneur);
-
     if (!isManager && !isEntrepreneur) {
       return res.status(403).json({
-        message: "You can only review jobs you're associated with",
-        debug: {
-          reviewer_id,
-          job_manager_user_id: job.manager_user_id,
-          job_entrepreneur_user_id: job.entrepreneur_user_id
-        }
+        message: "You can only review jobs you're associated with"
       });
     }
 
     // Verify reviewed_user_id is the other party in the job
     const expectedReviewedUserId = isManager ? job.entrepreneur_user_id : job.manager_user_id;
-
-    console.log('- Expected Reviewed User ID:', expectedReviewedUserId);
-    console.log('- Received Reviewed User ID:', reviewed_user_id, typeof reviewed_user_id);
 
     if (String(reviewed_user_id) !== String(expectedReviewedUserId)) {
       return res.status(400).json({

@@ -45,6 +45,9 @@ import residentRoutes from "./src/routes/residentRoutes.js";
 import groupChatRoutes from "./src/routes/groupChatRoutes.js";
 import contractRoutes from "./src/routes/contractRoutes.js";
 import adminRoutes from "./src/routes/adminRoutes.js";
+import supportRoutes from "./src/routes/supportRoutes.js";
+import disputeRoutes from "./src/routes/disputeRoutes.js";
+import geocodeRoutes from "./src/routes/geocodeRoutes.js";
 
 // ============================================
 // SOCKET SETUP
@@ -147,6 +150,7 @@ app.use(express.json());
 // ============================================
 // PUBLIC ROUTES (no auth) - must come BEFORE protected routes
 app.use("/api", registrationRoutes);
+app.use("/api", geocodeRoutes); // Geocode proxy - no auth needed for registration
 app.use("/api", debugRoutes); // DEBUG - No auth, must be before messageRoutes
 app.use("/api/admin", adminRoutes); // Admin routes - has its own auth, must be before messageRoutes
 
@@ -168,6 +172,8 @@ app.use("/api", notificationRoutes);
 app.use("/api/residents", residentRoutes);
 app.use("/api/residents/group-chats", groupChatRoutes);
 app.use("/api/contracts", contractRoutes);
+app.use("/api", supportRoutes);
+app.use("/api", disputeRoutes);
 
 // ============================================
 // HEALTH CHECK
