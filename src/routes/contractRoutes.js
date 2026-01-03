@@ -12,7 +12,7 @@ import { requireManager, requireEntrepreneur } from '../middleware/roleMiddlewar
 const router = express.Router();
 
 // ============================================
-// STRIPE CONNECT ROUTES (Entrepreneur Onboarding)
+// STRIPE CONNECT ROUTES (Entrepreneur Onboardings)
 // ============================================
 
 /**
