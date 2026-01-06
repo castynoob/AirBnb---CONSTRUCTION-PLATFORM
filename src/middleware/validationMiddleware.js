@@ -2,8 +2,10 @@ import { body, validationResult } from "express-validator";
 
 // Password validation regex - Simplified: min 8 chars, at least one lowercase and one number
 const PASSWORD_REGEX = /^(?=.*[a-z])(?=.*\d).{8,}$/;
-// Name validation regex (letters, spaces, hyphens, apostrophes only)
-const NAME_REGEX = /^[A-Za-zÀ-ÿ\s'\-]{2,50}$/;
+// Name validation regex for local registration (2-50 chars)
+const NAME_REGEX_LOCAL = /^[A-Za-zÀ-ÿ\s'\-]{2,50}$/;
+// Name validation regex for social login (1-50 chars - Google/Facebook may have short names)
+const NAME_REGEX_SOCIAL = /^[A-Za-zÀ-ÿ\s'\-]{1,50}$/;
 
 // Custom password validator
 const validatePasswordStrength = (value) => {
@@ -13,10 +15,14 @@ const validatePasswordStrength = (value) => {
   return true;
 };
 
-// Custom name validator
-const validateName = (value) => {
-  if (!NAME_REGEX.test(value)) {
-    throw new Error('Name must contain only letters, spaces, hyphens, and apostrophes (2-50 characters)');
+// Custom name validator - adapts based on provider (social login allows 1-char names)
+const validateName = (value, { req }) => {
+  const isSocialLogin = req.body.provider === 'google' || req.body.provider === 'facebook';
+  const regex = isSocialLogin ? NAME_REGEX_SOCIAL : NAME_REGEX_LOCAL;
+  const minChars = isSocialLogin ? 1 : 2;
+
+  if (!regex.test(value)) {
+    throw new Error(`Name must contain only letters, spaces, hyphens, and apostrophes (${minChars}-50 characters)`);
   }
   return true;
 };
