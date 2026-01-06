@@ -55,13 +55,16 @@ export const validateRegistration = [
     .escape(),
 
   // Phone validation (optional but recommended)
+  // Supports formats: +1 514 555 1234, (514) 555-1234, 514.555.1234, 5145551234, etc.
   body("phone")
     .optional()
     .trim()
     .notEmpty()
     .withMessage("Phone is required")
-    .matches(/^[\d\s\-\+\(\)]+$/)
-    .withMessage("Please enter a valid phone number"),
+    .matches(/^[\d\s\-\+\(\)\.]+$/)
+    .withMessage("Please enter a valid phone number (digits, spaces, dashes, dots allowed)")
+    .isLength({ min: 7, max: 25 })
+    .withMessage("Phone number must be between 7 and 25 characters"),
 
   // Provider validation - optional, defaults to "local"
   body("provider")
