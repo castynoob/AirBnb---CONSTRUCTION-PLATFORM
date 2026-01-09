@@ -173,7 +173,7 @@ export const adminLogin = async (req, res) => {
   }
 };
 
-// Admin Logout
+// Admin Logouts
 export const adminLogout = async (req, res) => {
   try {
     const { refreshToken } = req.body;
