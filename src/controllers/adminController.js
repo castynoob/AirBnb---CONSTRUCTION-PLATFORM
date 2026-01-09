@@ -127,7 +127,7 @@ export const adminLogin = async (req, res) => {
       { expiresIn: "1h" }
     );
 
-    // Create refresh token
+    // Create refresh tokens
     const refreshToken = crypto.randomBytes(64).toString("hex");
     const refreshTokenHash = crypto.createHash("sha256").update(refreshToken).digest("hex");
     const expiresAt = new Date(Date.now() + 7 * 24 * 60 * 60 * 1000); // 7 days
