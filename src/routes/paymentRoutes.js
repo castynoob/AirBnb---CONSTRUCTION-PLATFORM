@@ -57,6 +57,12 @@ router.get('/billing-history',
 );
 
 // ============================================
+// STRIPE CONFIG ROUTE (PUBLIC - No auth required)
+// ============================================
+
+router.get('/stripe-config', PaymentController.getStripeConfig);
+
+// ============================================
 // WEBHOOK ROUTE (NO AUTHENTICATION)
 // ============================================
 

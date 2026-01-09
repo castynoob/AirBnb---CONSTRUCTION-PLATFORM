@@ -1,4 +1,4 @@
-import stripe from '../config/stripe.js';
+import stripe, { stripeConfig } from '../config/stripe.js';
 import Subscription from '../models/subscriptionModel.js';
 import db from '../config/db.js';
 import * as cache from '../config/cache.js';
@@ -9,25 +9,29 @@ import {
     EntityTypes,
 } from '../models/userActivityModel.js';
 
-// ✅ UPDATED - Add price_id for each plan
-// TODO: Replace these with your actual Stripe price IDs from dashboard
-// ✅ TEMPORARY - These are Stripe's built-in test prices
+// ✅ DYNAMIC - Price IDs are loaded from stripeConfig based on STRIPE_MODE
 const PLANS = {
     basic: {
-        price_id: 'price_1SJU5t5Dbv5aHRPT6Q3phUCC',  // ✅ Your actual price ID
+        price_id: stripeConfig.priceIds.basic,
         name: 'Basic Entrepreneur Plan',
         price: 250,
         interval: 'month',
         bids_limit: 30
     },
     premium: {
-        price_id: 'price_1SJU5t5Dbv5aHRPT6Q3phUCC',  // Use same for now to test
+        price_id: stripeConfig.priceIds.premium,
         name: 'Premium Entrepreneur Plan',
         price: 429,
         interval: 'month',
         bids_limit: -1
     }
 };
+
+// Log which price IDs are being used
+console.log(`📋 Using Price IDs (${stripeConfig.mode} mode):`, {
+    basic: PLANS.basic.price_id,
+    premium: PLANS.premium.price_id
+});
 
 const PaymentController = {
     
@@ -88,9 +92,29 @@ const PaymentController = {
             const user = userQuery.rows[0];
 
             let customer;
+            let needsCustomerUpdate = false;
+
             if (user.stripe_customer_id) {
-                customer = await stripe.customers.retrieve(user.stripe_customer_id);
-            } else {
+                try {
+                    // Try to retrieve existing customer
+                    customer = await stripe.customers.retrieve(user.stripe_customer_id);
+
+                    // Check if customer was deleted
+                    if (customer.deleted) {
+                        console.log(`⚠️ Customer ${user.stripe_customer_id} was deleted, creating new one`);
+                        customer = null;
+                        needsCustomerUpdate = true;
+                    }
+                } catch (err) {
+                    // Customer doesn't exist in current Stripe mode (test vs live)
+                    console.log(`⚠️ Customer ${user.stripe_customer_id} not found in ${stripeConfig.mode} mode, creating new one`);
+                    customer = null;
+                    needsCustomerUpdate = true;
+                }
+            }
+
+            // Create new customer if needed
+            if (!customer) {
                 customer = await stripe.customers.create({
                     email: user.email,
                     payment_method: payment_method_id,
@@ -99,10 +123,16 @@ const PaymentController = {
                     },
                     metadata: {
                         user_id: user_id,
-                        entrepreneur_profile_id: entrepreneur_profile_id
+                        entrepreneur_profile_id: entrepreneur_profile_id,
+                        stripe_mode: stripeConfig.mode
                     }
                 });
+                needsCustomerUpdate = true;
+                console.log(`✅ Created new Stripe customer: ${customer.id} (${stripeConfig.mode} mode)`);
+            }
 
+            // Update database with new customer ID
+            if (needsCustomerUpdate) {
                 await db.query(
                     'UPDATE users SET stripe_customer_id = $1 WHERE id = $2',
                     [customer.id, user_id]
@@ -380,16 +410,53 @@ const PaymentController = {
             }
 
             const userQuery = await db.query(
-                'SELECT stripe_customer_id FROM users WHERE id = $1',
+                'SELECT email, stripe_customer_id FROM users WHERE id = $1',
                 [user_id]
             );
-            const stripe_customer_id = userQuery.rows[0]?.stripe_customer_id;
+            const user = userQuery.rows[0];
+            let stripe_customer_id = user?.stripe_customer_id;
+            let needsCustomerUpdate = false;
 
+            // Verify existing customer exists in current Stripe mode
+            if (stripe_customer_id) {
+                try {
+                    const existingCustomer = await stripe.customers.retrieve(stripe_customer_id);
+                    if (existingCustomer.deleted) {
+                        console.log(`⚠️ Customer ${stripe_customer_id} was deleted, creating new one`);
+                        stripe_customer_id = null;
+                        needsCustomerUpdate = true;
+                    }
+                } catch (err) {
+                    console.log(`⚠️ Customer ${stripe_customer_id} not found in ${stripeConfig.mode} mode, creating new one`);
+                    stripe_customer_id = null;
+                    needsCustomerUpdate = true;
+                }
+            }
+
+            // Create Stripe customer if one doesn't exist or wasn't found in current mode
             if (!stripe_customer_id) {
-                return res.status(400).json({ 
-                    error: 'No payment method on file',
-                    message: 'Please add a payment method before unlocking budgets'
+                console.log(`🔧 Creating new Stripe customer for user ${user_id} (${stripeConfig.mode} mode)`);
+                const customer = await stripe.customers.create({
+                    email: user.email,
+                    payment_method: payment_method_id,
+                    metadata: {
+                        user_id: user_id,
+                        entrepreneur_profile_id: entrepreneur_id,
+                        stripe_mode: stripeConfig.mode
+                    }
                 });
+
+                stripe_customer_id = customer.id;
+                needsCustomerUpdate = true;
+                console.log(`✅ Stripe customer created: ${stripe_customer_id}`);
+            }
+
+            // Save customer ID to database if needed
+            if (needsCustomerUpdate) {
+                await db.query(
+                    'UPDATE users SET stripe_customer_id = $1 WHERE id = $2',
+                    [stripe_customer_id, user_id]
+                );
             }
 
             const paymentIntent = await stripe.paymentIntents.create({
@@ -607,7 +674,7 @@ const PaymentController = {
 
     async handleWebhook(req, res) {
         const sig = req.headers['stripe-signature'];
-        const webhookSecret = process.env.STRIPE_WEBHOOK_SECRET;
+        const webhookSecret = stripeConfig.webhookSecret;
 
         let event;
 
@@ -844,6 +911,24 @@ const PaymentController = {
         } catch (error) {
             console.error('❌ Webhook handler error:', error);
             res.status(500).json({ error: 'Webhook handler failed' });
+        }
+    },
+
+    /**
+     * GET STRIPE CONFIG
+     * GET /api/payments/stripe-config
+     * Returns the current Stripe mode and publishable key for frontend
+     */
+    async getStripeConfig(req, res) {
+        try {
+            res.json({
+                mode: stripeConfig.mode,
+                publishableKey: stripeConfig.publishableKey,
+                isLiveMode: stripeConfig.isLiveMode
+            });
+        } catch (error) {
+            console.error('❌ Get Stripe config error:', error);
+            res.status(500).json({ error: error.message });
         }
     }
 };
