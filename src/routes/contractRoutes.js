@@ -149,6 +149,18 @@ router.post(
 );
 
 /**
+ * @route   POST /api/contracts/:id/confirm-payment
+ * @desc    Confirm payment after successful Stripe payment (backup for webhook)
+ * @access  Manager only
+ */
+router.post(
+  '/:id/confirm-payment',
+  authenticateToken,
+  requireManager,
+  ContractController.confirmPayment
+);
+
+/**
  * @route   POST /api/contracts/:id/complete
  * @desc    Mark work as complete (triggers manager review)
  * @access  Entrepreneur only

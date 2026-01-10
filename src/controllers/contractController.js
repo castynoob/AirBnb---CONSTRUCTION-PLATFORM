@@ -689,6 +689,137 @@ const ContractController = {
   },
 
   /**
+   * CONFIRM PAYMENT (Manual - backup for webhook)
+   * Called by frontend after successful Stripe payment
+   * POST /api/contracts/:id/confirm-payment
+   */
+  async confirmPayment(req, res) {
+    try {
+      const { id } = req.params;
+      const { payment_intent_id } = req.body;
+      const user_id = req.user.id;
+
+      // Get contract and verify manager owns it
+      const contractResult = await pool.query(
+        `SELECT c.*, mp.user_id as manager_user_id,
+                ep.user_id as entrepreneur_user_id,
+                j.title as job_title
+         FROM contracts c
+         JOIN manager_profiles mp ON c.manager_id = mp.id
+         JOIN entrepreneur_profiles ep ON c.entrepreneur_id = ep.id
+         JOIN jobs j ON c.job_id = j.id
+         WHERE c.id = $1`,
+        [id]
+      );
+
+      if (contractResult.rows.length === 0) {
+        return res.status(404).json({ error: 'Contract not found' });
+      }
+
+      const contract = contractResult.rows[0];
+
+      if (contract.manager_user_id !== user_id) {
+        return res.status(403).json({ error: 'Only the job owner can confirm payment' });
+      }
+
+      // If already paid, return success
+      if (contract.status === 'paid') {
+        return res.json({
+          success: true,
+          message: 'Payment already confirmed',
+          contract: { id: contract.id, status: 'paid' }
+        });
+      }
+
+      // Verify payment intent with Stripe
+      let paymentIntent;
+      try {
+        paymentIntent = await stripe.paymentIntents.retrieve(
+          payment_intent_id || contract.stripe_payment_intent_id
+        );
+      } catch (stripeErr) {
+        console.error('Error retrieving payment intent:', stripeErr);
+        return res.status(400).json({
+          error: 'Could not verify payment',
+          message: 'Payment intent not found or invalid'
+        });
+      }
+
+      // Check payment status
+      if (paymentIntent.status !== 'succeeded') {
+        return res.status(400).json({
+          error: 'Payment not completed',
+          payment_status: paymentIntent.status,
+          message: `Payment is ${paymentIntent.status}. Please complete the payment first.`
+        });
+      }
+
+      // Update contract status
+      await pool.query(
+        `UPDATE contracts
+         SET status = 'paid',
+             payment_status = 'succeeded',
+             stripe_charge_id = $1,
+             paid_at = NOW(),
+             updated_at = NOW()
+         WHERE id = $2`,
+        [paymentIntent.latest_charge, id]
+      );
+
+      // Update job contract_status
+      await pool.query(
+        `UPDATE jobs SET contract_status = 'paid' WHERE id = $1`,
+        [contract.job_id]
+      );
+
+      // Log contract event
+      await pool.query(
+        `INSERT INTO contract_events (contract_id, event_type, actor_user_id, actor_role, event_data)
+         VALUES ($1, 'payment_confirmed_manual', $2, 'manager', $3)`,
+        [id, user_id, JSON.stringify({ payment_intent_id: paymentIntent.id })]
+      );
+
+      // Notify entrepreneur
+      await createNotification({
+        userId: contract.entrepreneur_user_id,
+        type: 'payment_received',
+        jobId: contract.job_id,
+        jobTitle: contract.job_title,
+        content: `Payment has been received for "${contract.job_title}". You can now start the work!`
+      });
+
+      // Socket notification
+      const io = getIO();
+      if (io) {
+        io.to(contract.entrepreneur_user_id.toString()).emit('payment_received', {
+          contractId: id,
+          jobId: contract.job_id,
+          jobTitle: contract.job_title
+        });
+      }
+
+      console.log(`✅ Payment manually confirmed for contract ${id}`);
+
+      res.json({
+        success: true,
+        message: 'Payment confirmed successfully',
+        contract: {
+          id: contract.id,
+          status: 'paid',
+          payment_status: 'succeeded'
+        }
+      });
+
+    } catch (error) {
+      console.error('❌ Confirm payment error:', error);
+      res.status(500).json({
+        error: 'Failed to confirm payment',
+        message: error.message
+      });
+    }
+  },
+
+  /**
    * GET CONTRACT BY JOB ID
    * GET /api/contracts/job/:job_id
    */
