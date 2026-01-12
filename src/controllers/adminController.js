@@ -120,14 +120,14 @@ export const adminLogin = async (req, res) => {
       return res.status(401).json({ message: "Invalid credentials" });
     }
 
-    // Create access token (1 hour for admin)
+    // Create access token (1 hour for adminss)
     const accessToken = jwt.sign(
       { id: admin.id, email: admin.email, role: admin.role, isAdmin: true },
       process.env.JWT_SECRET,
       { expiresIn: "1h" }
     );
 
-    // Create refresh tokens
+    // Create refresh tokenss
     const refreshToken = crypto.randomBytes(64).toString("hex");
     const refreshTokenHash = crypto.createHash("sha256").update(refreshToken).digest("hex");
     const expiresAt = new Date(Date.now() + 7 * 24 * 60 * 60 * 1000); // 7 days
