@@ -65,11 +65,21 @@ const InspectionController = {
       const headers = rawData.length > 0 ? Object.keys(rawData[0]) : [];
       const headerStr = headers.join('|').toLowerCase();
 
-      // Check if it's a maintenance template (has Uniformat Code, Component, Type of Work)
+      // Check if it's a maintenance template (English or French)
+      // Supports: Uniformat Code, Component, Type of Work, and French equivalents
       const isMaintenanceTemplate =
         headerStr.includes('uniformat') ||
         headerStr.includes('component') ||
-        headerStr.includes('type of work');
+        headerStr.includes('composant') ||
+        headerStr.includes('type of work') ||
+        headerStr.includes('type de travaux') ||
+        headerStr.includes('élément') ||
+        headerStr.includes('element') ||
+        headerStr.includes('ouvrage') ||
+        headerStr.includes('intervention') ||
+        headerStr.includes('plan de maintien') ||
+        headerStr.includes('carnet') ||
+        headerStr.includes('entretien');
 
       console.log(`[Inspection] Template type: ${isMaintenanceTemplate ? 'Maintenance Plan' : 'Standard Inspection'}`);
 
@@ -413,13 +423,20 @@ const InspectionController = {
   /**
    * Download inspection Excel template
    * GET /api/inspections/template
+   * Query params:
+   *   - lang: 'fr' for French (default), 'en' for English
    */
   async downloadTemplate(req, res) {
     try {
-      const buffer = generateInspectionTemplate();
+      const language = req.query.lang || 'fr'; // Default to French
+      const buffer = generateInspectionTemplate(language);
+
+      const filename = language === 'fr'
+        ? 'plan-de-maintien-template.xlsx'
+        : 'inspection-template.xlsx';
 
       res.setHeader('Content-Type', 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet');
-      res.setHeader('Content-Disposition', 'attachment; filename=inspection-template.xlsx');
+      res.setHeader('Content-Disposition', `attachment; filename=${filename}`);
 
       res.send(buffer);
     } catch (error) {
