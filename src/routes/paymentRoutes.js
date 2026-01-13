@@ -22,11 +22,17 @@ router.get('/subscription',
     PaymentController.getSubscription
 );
 
-router.post('/cancel-subscription', 
+router.post('/cancel-subscription',
     authenticateToken,
     requireEntrepreneur,
     requireSubscription,
     PaymentController.cancelSubscription
+);
+
+router.put('/payment-method',
+    authenticateToken,
+    requireEntrepreneur,
+    PaymentController.updatePaymentMethod
 );
 
 // ============================================

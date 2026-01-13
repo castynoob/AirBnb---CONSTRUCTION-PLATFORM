@@ -145,10 +145,11 @@ const PaymentController = {
 
             const subscription = await stripe.subscriptions.create({
                 customer: customer.id,
-                items: [{ 
+                items: [{
                     price: plan.price_id
                 }],
                 trial_period_days: 14,
+                default_payment_method: payment_method_id,
                 payment_settings: {
                     payment_method_types: ['card'],
                     save_default_payment_method: 'on_subscription'
@@ -628,7 +629,7 @@ const PaymentController = {
                 stripe_id: sub.stripe_subscription_id
             }));
 
-            // Format budget unlock payments - Budget unlock costs $20 USD
+            // Format budget unlock paymentss - Budget unlock costs $20 USD
             const BUDGET_UNLOCK_COST = 20.00;
             const budgetUnlockPayments = budgetUnlocksQuery.rows.map(unlock => ({
                 id: unlock.id,
@@ -911,6 +912,120 @@ const PaymentController = {
         } catch (error) {
             console.error('❌ Webhook handler error:', error);
             res.status(500).json({ error: 'Webhook handler failed' });
+        }
+    },
+
+    /**
+     * UPDATE PAYMENT METHOD
+     * PUT /api/payments/payment-method
+     * Body: { payment_method_id: 'pm_xxx' }
+     * Updates the default payment method for both customer and subscription
+     */
+    async updatePaymentMethod(req, res) {
+        try {
+            const { payment_method_id } = req.body;
+            const user_id = req.user.id;
+
+            if (!payment_method_id) {
+                return res.status(400).json({
+                    error: 'Missing required field',
+                    required: ['payment_method_id']
+                });
+            }
+
+            // Get user's Stripe customer ID
+            const userQuery = await db.query(
+                'SELECT stripe_customer_id FROM users WHERE id = $1',
+                [user_id]
+            );
+
+            if (!userQuery.rows[0]?.stripe_customer_id) {
+                return res.status(400).json({
+                    error: 'No Stripe customer found',
+                    message: 'You need an active subscription to update payment method'
+                });
+            }
+
+            const stripe_customer_id = userQuery.rows[0].stripe_customer_id;
+
+            // Get current subscription
+            const subscription = await Subscription.findByUserId(user_id);
+
+            if (!subscription) {
+                return res.status(404).json({
+                    error: 'No subscription found',
+                    message: 'You need an active subscription to update payment method'
+                });
+            }
+
+            // Attach the new payment method to the customer
+            await stripe.paymentMethods.attach(payment_method_id, {
+                customer: stripe_customer_id
+            });
+
+            // Update customer's default payment method
+            await stripe.customers.update(stripe_customer_id, {
+                invoice_settings: {
+                    default_payment_method: payment_method_id
+                }
+            });
+
+            // Update subscription's default payment method
+            await stripe.subscriptions.update(subscription.stripe_subscription_id, {
+                default_payment_method: payment_method_id
+            });
+
+            console.log(`✅ Payment method updated for user ${user_id}`);
+
+            // If subscription was past_due, try to pay the latest invoice
+            if (subscription.status === 'past_due') {
+                try {
+                    const stripeSubscription = await stripe.subscriptions.retrieve(
+                        subscription.stripe_subscription_id
+                    );
+
+                    if (stripeSubscription.latest_invoice) {
+                        const invoice = await stripe.invoices.retrieve(stripeSubscription.latest_invoice);
+
+                        if (invoice.status === 'open') {
+                            await stripe.invoices.pay(stripeSubscription.latest_invoice);
+                            console.log(`✅ Retried payment for past_due subscription ${subscription.stripe_subscription_id}`);
+                        }
+                    }
+                } catch (retryError) {
+                    console.error('⚠️ Failed to retry payment:', retryError.message);
+                    // Don't fail the request - payment method was still updated
+                }
+            }
+
+            // Invalidate subscription cache
+            await cache.del(SUBSCRIPTION_KEYS.status(user_id));
+
+            // Log user activity
+            const ipAddress = req.ip || req.headers['x-forwarded-for'] || req.connection?.remoteAddress;
+            const userAgent = req.headers['user-agent'];
+            await createUserActivityLog(
+                user_id,
+                ActivityActions.SUBSCRIPTION_RENEWED,
+                EntityTypes.SUBSCRIPTION,
+                subscription.stripe_subscription_id,
+                { action: 'payment_method_updated' },
+                ipAddress,
+                userAgent
+            );
+
+            res.json({
+                success: true,
+                message: 'Payment method updated successfully',
+                subscription_status: subscription.status
+            });
+
+        } catch (error) {
+            console.error('❌ Update payment method error:', error);
+            res.status(500).json({
+                error: 'Failed to update payment method',
+                message: error.message
+            });
         }
     },
 
