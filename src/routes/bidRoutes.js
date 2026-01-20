@@ -19,7 +19,7 @@ import {
 
 const router = express.Router();
 
-// Entrepreneur endpoints
+// Entrepreneur endpointss
 // Submit bid - Invalidate bid caches
 router.post(
   "/",
