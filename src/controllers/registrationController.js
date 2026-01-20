@@ -514,3 +514,45 @@ export const registerResident = async (req, res) => {
     res.status(500).json({ message: "Server error", error: error.message });
   }
 };
+
+// 🟢 Check for duplicate license number or phone number
+export const checkDuplicates = async (req, res) => {
+  const { license_number, phone } = req.body;
+
+  try {
+    const duplicates = {
+      license_number: false,
+      phone: false
+    };
+
+    // Check for duplicate license number in entrepreneur_profiles
+    if (license_number) {
+      const licenseCheck = await pool.query(
+        "SELECT id FROM entrepreneur_profiles WHERE license_number = $1",
+        [license_number]
+      );
+      duplicates.license_number = licenseCheck.rows.length > 0;
+    }
+
+    // Check for duplicate phone number in users table
+    if (phone) {
+      // Normalize phone number for comparison (remove spaces, dashes, etc.)
+      const normalizedPhone = phone.replace(/[\s\-()]/g, '');
+      const phoneCheck = await pool.query(
+        "SELECT id FROM users WHERE REPLACE(REPLACE(REPLACE(REPLACE(phone, ' ', ''), '-', ''), '(', ''), ')', '') = $1",
+        [normalizedPhone]
+      );
+      duplicates.phone = phoneCheck.rows.length > 0;
+    }
+
+    res.status(200).json({
+      duplicates,
+      message: duplicates.license_number || duplicates.phone
+        ? "Duplicate found"
+        : "No duplicates"
+    });
+  } catch (error) {
+    console.error("Error checking duplicates:", error);
+    res.status(500).json({ message: "Server error", error: error.message });
+  }
+};
