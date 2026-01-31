@@ -48,6 +48,7 @@ import adminRoutes from "./src/routes/adminRoutes.js";
 import supportRoutes from "./src/routes/supportRoutes.js";
 import disputeRoutes from "./src/routes/disputeRoutes.js";
 import geocodeRoutes from "./src/routes/geocodeRoutes.js";
+import promoterRoutes from "./src/routes/promoterRoutes.js";
 
 // ============================================
 // SOCKET SETUP
@@ -152,7 +153,8 @@ app.use(express.json());
 app.use("/api", registrationRoutes);
 app.use("/api", geocodeRoutes); // Geocode proxy - no auth needed for registration
 app.use("/api", debugRoutes); // DEBUG - No auth, must be before messageRoutes
-app.use("/api/admin", adminRoutes); // Admin routes - has its own auth, must be before messageRoutes
+app.use("/api/admin/promoters", promoterRoutes); // Promoter management routes - must be BEFORE /api/admin
+app.use("/api/admin", adminRoutes); // Admin routes - has its own auth
 
 // PROTECTED ROUTES
 app.use("/api/auth", authRoutes);

@@ -1,4 +1,5 @@
 import Subscription from '../models/subscriptionModel.js';
+import { Promoter } from '../models/promoterModel.js';
 import db from '../config/db.js';
 import * as cache from '../config/cache.js';
 import { SUBSCRIPTION_KEYS, TTL } from '../utils/cacheKeys.js';
@@ -7,10 +8,39 @@ import { SUBSCRIPTION_KEYS, TTL } from '../utils/cacheKeys.js';
  * Require active subscription
  * Blocks access if user doesn't have active or trialing subscription
  * Now with Redis caching for improved performance
+ * Promoters get free access bypass
  */
 const requireSubscription = async (req, res, next) => {
     try {
         const user_id = req.user.id;
+
+        // ============================================
+        // CHECK IF USER IS A PROMOTER (FREE ACCESS)
+        // ============================================
+        const userQuery = await db.query(
+            'SELECT is_promoter, promoter_id FROM users WHERE id = $1',
+            [user_id]
+        );
+
+        if (userQuery.rows.length > 0 && userQuery.rows[0].is_promoter) {
+            const promoter = await Promoter.findById(userQuery.rows[0].promoter_id);
+
+            if (promoter && promoter.is_active) {
+                // Promoter has free access
+                req.subscription = {
+                    status: 'active',
+                    plan_type: 'premium',
+                    is_promoter: true,
+                    promoter_id: promoter.id
+                };
+                console.log(`🎫 Promoter bypass: ${promoter.promoter_name}`);
+                return next();
+            }
+        }
+
+        // ============================================
+        // REGULAR SUBSCRIPTION CHECK
+        // ============================================
 
         // Try to get subscription from cache first
         const cacheKey = SUBSCRIPTION_KEYS.status(user_id);

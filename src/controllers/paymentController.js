@@ -1,5 +1,6 @@
 import stripe, { stripeConfig } from '../config/stripe.js';
 import Subscription from '../models/subscriptionModel.js';
+import { Promoter, PromoCodeRedemption } from '../models/promoterModel.js';
 import db from '../config/db.js';
 import * as cache from '../config/cache.js';
 import { SUBSCRIPTION_KEYS } from '../utils/cacheKeys.js';
@@ -8,6 +9,7 @@ import {
     ActivityActions,
     EntityTypes,
 } from '../models/userActivityModel.js';
+import { notifyPromoterOfReferral } from '../services/promoterNotificationService.js';
 
 // ✅ DYNAMIC - Price IDs are loaded from stripeConfig based on STRIPE_MODE
 const PLANS = {
@@ -38,22 +40,105 @@ const PaymentController = {
     /**
      * CREATE SUBSCRIPTION
      * POST /api/payments/create-subscription
-     * Body: { plan_type: 'basic' | 'premium', payment_method_id: 'pm_xxx' }
+     * Body: { plan_type: 'basic' | 'premium', payment_method_id: 'pm_xxx', promo_code?: string }
      */
     async createSubscription(req, res) {
         try {
-            const { plan_type, payment_method_id } = req.body;
+            const { plan_type, payment_method_id, promo_code } = req.body;
             const user_id = req.user.id;
 
+            // ============================================
+            // PROMO CODE HANDLING
+            // ============================================
+            if (promo_code) {
+                const upperCode = promo_code.toUpperCase().trim();
+
+                // Check if it's an activation code (promoter free access)
+                const promoterByActivation = await Promoter.findByActivationCode(upperCode);
+                if (promoterByActivation) {
+                    // Check if already activated
+                    if (promoterByActivation.user_id) {
+                        return res.status(400).json({
+                            error: 'Activation code already used',
+                            message: 'This activation code has already been used'
+                        });
+                    }
+
+                    // Get entrepreneur profile
+                    const entrepreneurQuery = await db.query(
+                        'SELECT id FROM entrepreneur_profiles WHERE user_id = $1',
+                        [user_id]
+                    );
+
+                    if (entrepreneurQuery.rows.length === 0) {
+                        return res.status(403).json({
+                            error: 'Entrepreneur account required',
+                            message: 'Only entrepreneurs can use activation codes'
+                        });
+                    }
+
+                    const entrepreneur_profile_id = entrepreneurQuery.rows[0].id;
+
+                    // Activate promoter - grant free access
+                    await Promoter.activate(promoterByActivation.id, user_id);
+
+                    // Create actual subscription record for promoter (free premium access)
+                    const now = new Date();
+                    const farFuture = new Date('2099-12-31'); // Promoters get indefinite access
+
+                    const subscription = await Subscription.upsert({
+                        user_id,
+                        entrepreneur_profile_id,
+                        stripe_customer_id: null,
+                        stripe_subscription_id: `promoter_${promoterByActivation.id}_${user_id}`,
+                        plan_type: 'premium',
+                        status: 'active',
+                        trial_end: null,
+                        current_period_start: now,
+                        current_period_end: farFuture
+                    });
+
+                    // Update user's promoter status
+                    await db.query(
+                        'UPDATE users SET is_promoter = true, promoter_id = $1 WHERE id = $2',
+                        [promoterByActivation.id, user_id]
+                    );
+
+                    console.log(`✅ Promoter activated: ${promoterByActivation.promoter_name} (user: ${user_id})`);
+
+                    // Invalidate subscription cache
+                    const cacheKey = `${SUBSCRIPTION_KEYS.USER_SUBSCRIPTION}:${user_id}`;
+                    cache.del(cacheKey);
+
+                    return res.json({
+                        success: true,
+                        message: 'Promoter account activated! You have free platform access.',
+                        is_promoter: true,
+                        subscription: {
+                            id: subscription.id,
+                            status: 'active',
+                            plan_type: 'premium',
+                            is_promoter: true,
+                            current_period_start: subscription.current_period_start,
+                            current_period_end: subscription.current_period_end
+                        }
+                    });
+                }
+            }
+
+            // ============================================
+            // REGULAR SUBSCRIPTION FLOW
+            // ============================================
+
             if (!plan_type || !payment_method_id) {
-                return res.status(400).json({ 
+                return res.status(400).json({
                     error: 'Missing required fields',
                     required: ['plan_type', 'payment_method_id']
                 });
             }
 
             if (!['basic', 'premium'].includes(plan_type)) {
-                return res.status(400).json({ 
+                return res.status(400).json({
                     error: 'Invalid plan type',
                     message: 'Plan must be "basic" or "premium"'
                 });
@@ -140,10 +225,34 @@ const PaymentController = {
             }
 
             const plan = PLANS[plan_type];
-            
+
             console.log('🔍 Creating subscription with price:', plan.price_id);
 
-            const subscription = await stripe.subscriptions.create({
+            // Check for referral code (discount)
+            let referralPromoter = null;
+            let stripePromoCodeId = null;
+
+            if (promo_code) {
+                const upperCode = promo_code.toUpperCase().trim();
+                referralPromoter = await Promoter.findByReferralCode(upperCode);
+
+                if (referralPromoter) {
+                    // Check max redemptions
+                    const redemptionCheck = await Promoter.checkMaxRedemptions(referralPromoter.id);
+                    if (!redemptionCheck.allowed) {
+                        return res.status(400).json({
+                            error: 'Promo code limit reached',
+                            message: 'This promo code has reached its maximum redemptions'
+                        });
+                    }
+
+                    stripePromoCodeId = referralPromoter.stripe_promo_code_id;
+                    console.log(`🎟️ Applying referral code: ${upperCode} (${referralPromoter.discount_percent}% off)`);
+                }
+            }
+
+            // Build subscription options
+            const subscriptionOptions = {
                 customer: customer.id,
                 items: [{
                     price: plan.price_id
@@ -158,9 +267,18 @@ const PaymentController = {
                 metadata: {
                     user_id: user_id,
                     entrepreneur_profile_id: entrepreneur_profile_id,
-                    plan_type: plan_type
+                    plan_type: plan_type,
+                    promo_code: promo_code || null,
+                    promoter_id: referralPromoter?.id || null
                 }
-            });
+            };
+
+            // Add promotion code if referral code was provided
+            if (stripePromoCodeId) {
+                subscriptionOptions.promotion_code = stripePromoCodeId;
+            }
+
+            const subscription = await stripe.subscriptions.create(subscriptionOptions);
 
             console.log('📨 Stripe subscription response:', {
                 id: subscription.id,
@@ -189,7 +307,8 @@ const PaymentController = {
                 period_end: period_end_date
             });
 
-            await Subscription.upsert({
+            // Build subscription data with promo code info
+            const subscriptionData = {
                 user_id,
                 entrepreneur_profile_id,
                 stripe_customer_id: customer.id,
@@ -199,7 +318,58 @@ const PaymentController = {
                 trial_end: trial_end_date,
                 current_period_start: period_start_date,
                 current_period_end: period_end_date
-            });
+            };
+
+            await Subscription.upsert(subscriptionData);
+
+            // Update subscription with promo code info if referral was used
+            if (referralPromoter) {
+                await db.query(
+                    `UPDATE subscriptions
+                     SET promoter_id = $1, promo_code_used = $2, discount_percent = $3, discount_months = $4
+                     WHERE stripe_subscription_id = $5`,
+                    [
+                        referralPromoter.id,
+                        promo_code.toUpperCase(),
+                        referralPromoter.discount_percent,
+                        referralPromoter.discount_duration,
+                        subscription.id
+                    ]
+                );
+
+                // Record the redemption (non-blocking - don't fail subscription if this fails)
+                try {
+                    const subQuery = await db.query(
+                        'SELECT id FROM subscriptions WHERE stripe_subscription_id = $1',
+                        [subscription.id]
+                    );
+
+                    if (subQuery.rows.length > 0) {
+                        const redemption = await PromoCodeRedemption.create({
+                            referral_code: promo_code.toUpperCase(),
+                            promoter_id: referralPromoter.id,
+                            redeemed_by_user_id: user_id,
+                            subscription_id: subQuery.rows[0].id,
+                            discount_percent: referralPromoter.discount_percent,
+                            discount_duration: referralPromoter.discount_duration
+                        });
+
+                        // Send notification to promoter (async, non-blocking)
+                        const userInfo = await db.query(
+                            'SELECT first_name, last_name FROM users WHERE id = $1',
+                            [user_id]
+                        );
+                        if (userInfo.rows.length > 0) {
+                            notifyPromoterOfReferral(referralPromoter, userInfo.rows[0], redemption.id)
+                                .catch(err => console.error('Notification error:', err));
+                        }
+                        console.log(`✅ Referral recorded: ${promo_code} for user ${user_id}`);
+                    }
+                } catch (redemptionError) {
+                    // Log error but don't fail the subscription
+                    console.error('⚠️ Failed to record redemption (subscription still successful):', redemptionError.message);
+                }
+            }
 
             if (plan_type === 'basic') {
                 await db.query(

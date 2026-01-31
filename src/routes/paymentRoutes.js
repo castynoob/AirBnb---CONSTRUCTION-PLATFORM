@@ -2,6 +2,7 @@ import express from 'express';
 const router = express.Router();
 
 import PaymentController from '../controllers/paymentController.js';
+import PromoterController from '../controllers/promoterController.js';
 import { authenticateToken } from '../middleware/authMiddleware.js';
 import { requireEntrepreneur } from '../middleware/roleMiddleware.js';
 import { requireSubscription } from '../middleware/subscriptionMiddleware.js';
@@ -61,6 +62,12 @@ router.get('/billing-history',
     requireEntrepreneur,
     PaymentController.getBillingHistory
 );
+
+// ============================================
+// PROMO CODE VALIDATION (PUBLIC - No auth required)
+// ============================================
+
+router.post('/validate-promo-code', PromoterController.validatePromoCode);
 
 // ============================================
 // STRIPE CONFIG ROUTE (PUBLIC - No auth required)
