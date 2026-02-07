@@ -1,11 +1,10 @@
 // ============================================
 // CONTRACT CONTROLLER
-// Handles contract-based payments between managers and entrepreneurs
+// Handles contract workflow between managers and entrepreneurs
+// Note: Payments are handled externally, outside the application
 // ============================================
 
-import stripe from '../config/stripe.js';
 import pool from '../config/db.js';
-import { PLATFORM_FEE_PERCENTAGE } from './stripeConnectController.js';
 import { getIO } from '../config/socketSetup.js';
 import { createNotification } from './notificationController.js';
 
@@ -68,75 +67,83 @@ const ContractController = {
         });
       }
 
-      // Check entrepreneur has Stripe Connect set up
-      const entrepreneurResult = await pool.query(
-        `SELECT stripe_connect_account_id, stripe_connect_onboarded,
-                stripe_connect_charges_enabled
-         FROM entrepreneur_profiles
-         WHERE id = $1`,
-        [bid.entrepreneur_id]
-      );
-
-      const entrepreneur = entrepreneurResult.rows[0];
-
-      if (!entrepreneur.stripe_connect_account_id || !entrepreneur.stripe_connect_onboarded) {
-        return res.status(400).json({
-          error: 'Entrepreneur has not completed payment setup',
-          message: 'The contractor must complete Stripe onboarding before you can create a contract'
-        });
-      }
-
-      // Calculate amounts
+      // Get contract amount from bid
       const contractAmount = parseFloat(bid.amount);
-      const platformFeeAmount = (contractAmount * PLATFORM_FEE_PERCENTAGE) / 100;
-      const entrepreneurPayoutAmount = contractAmount - platformFeeAmount;
 
-      // Create contract
+      // Create contract - payments are handled externally
       const contractResult = await pool.query(
         `INSERT INTO contracts
          (job_id, bid_id, manager_id, entrepreneur_id,
-          contract_amount, platform_fee_percentage, platform_fee_amount, entrepreneur_payout_amount,
-          status, payment_status, payout_status)
-         VALUES ($1, $2, $3, $4, $5, $6, $7, $8, 'pending_payment', 'unpaid', 'pending')
+          contract_amount, status)
+         VALUES ($1, $2, $3, $4, $5, 'active')
          RETURNING *`,
         [
           bid.job_id,
           bid_id,
           bid.manager_profile_id,
           bid.entrepreneur_id,
-          contractAmount,
-          PLATFORM_FEE_PERCENTAGE,
-          platformFeeAmount,
-          entrepreneurPayoutAmount
+          contractAmount
         ]
       );
 
       const contract = contractResult.rows[0];
 
-      // Update job with contract status
-      await pool.query(
-        `UPDATE jobs SET has_contract = true, contract_status = 'pending_payment' WHERE id = $1`,
-        [bid.job_id]
+      // Get entrepreneur's user_id (jobs.entrepreneur_id stores USER ID, not profile ID)
+      const entrepreneurResult = await pool.query(
+        `SELECT u.id as user_id FROM entrepreneur_profiles ep
+         JOIN users u ON ep.user_id = u.id WHERE ep.id = $1`,
+        [bid.entrepreneur_id]
       );
+
+      const entrepreneurUserId = entrepreneurResult.rows[0]?.user_id;
+
+      // Update job with contract status and assign entrepreneur
+      // NOTE: entrepreneur_id column stores the USER ID, not entrepreneur_profiles.id
+      await pool.query(
+        `UPDATE jobs SET
+           has_contract = true,
+           contract_status = 'active',
+           entrepreneur_id = $2,
+           status = 'accepted'
+         WHERE id = $1`,
+        [bid.job_id, entrepreneurUserId]
+      );
+
+      console.log(`📝 Contract created: ${contract.id} for job ${bid.job_id}, assigned to entrepreneur user: ${entrepreneurUserId}`);
 
       // Log contract creation event
       await pool.query(
         `INSERT INTO contract_events (contract_id, event_type, actor_user_id, actor_role, event_data)
          VALUES ($1, 'contract_created', $2, 'manager', $3)`,
-        [contract.id, user_id, JSON.stringify({ bid_id, contract_amount: contractAmount })]
+        [contract.id, user_id, JSON.stringify({ bid_id, contract_amount: contractAmount, entrepreneur_user_id: entrepreneurUserId })]
       );
 
-      console.log(`📝 Contract created: ${contract.id} for job ${bid.job_id}`);
+      if (entrepreneurResult.rows[0]) {
+        await createNotification({
+          userId: entrepreneurResult.rows[0].user_id,
+          type: 'contract_created',
+          jobId: bid.job_id,
+          jobTitle: bid.job_title,
+          content: `Contract created for "${bid.job_title}". You can now start the work!`
+        });
+
+        const io = getIO();
+        if (io) {
+          io.to(entrepreneurResult.rows[0].user_id.toString()).emit('contract_created', {
+            contractId: contract.id,
+            jobId: bid.job_id,
+            jobTitle: bid.job_title
+          });
+        }
+      }
 
       res.status(201).json({
         success: true,
-        message: 'Contract created successfully',
+        message: 'Contract created successfully. Work can begin immediately.',
         contract: {
           id: contract.id,
           job_id: contract.job_id,
           contract_amount: contractAmount,
-          platform_fee: platformFeeAmount,
-          entrepreneur_payout: entrepreneurPayoutAmount,
           status: contract.status
         }
       });
@@ -148,189 +155,6 @@ const ContractController = {
         message: error.message
       });
     }
-  },
-
-  /**
-   * CREATE PAYMENT INTENT
-   * Creates a Stripe PaymentIntent for the manager to pay
-   * POST /api/contracts/:id/pay
-   */
-  async createPaymentIntent(req, res) {
-    try {
-      const { id } = req.params;
-      const user_id = req.user.id;
-
-      // Get contract and verify ownership
-      const contractResult = await pool.query(
-        `SELECT c.*, mp.user_id as manager_user_id, u.email as manager_email,
-                u.stripe_customer_id,
-                ep.stripe_connect_account_id,
-                j.title as job_title
-         FROM contracts c
-         JOIN manager_profiles mp ON c.manager_id = mp.id
-         JOIN users u ON mp.user_id = u.id
-         JOIN entrepreneur_profiles ep ON c.entrepreneur_id = ep.id
-         JOIN jobs j ON c.job_id = j.id
-         WHERE c.id = $1`,
-        [id]
-      );
-
-      if (contractResult.rows.length === 0) {
-        return res.status(404).json({ error: 'Contract not found' });
-      }
-
-      const contract = contractResult.rows[0];
-
-      if (contract.manager_user_id !== user_id) {
-        return res.status(403).json({ error: 'Only the job owner can pay for this contract' });
-      }
-
-      if (contract.status !== 'pending_payment') {
-        return res.status(400).json({
-          error: 'Contract is not awaiting payment',
-          current_status: contract.status
-        });
-      }
-
-      // Create or retrieve Stripe customer for manager
-      let customerId = contract.stripe_customer_id;
-
-      if (!customerId) {
-        const customer = await stripe.customers.create({
-          email: contract.manager_email,
-          metadata: {
-            user_id: user_id,
-            platform: 'intervos'
-          }
-        });
-        customerId = customer.id;
-
-        await pool.query(
-          'UPDATE users SET stripe_customer_id = $1 WHERE id = $2',
-          [customerId, user_id]
-        );
-      }
-
-      // Amount in cents
-      const amountInCents = Math.round(contract.contract_amount * 100);
-
-      // Create PaymentIntent
-      // Using destination charge model - funds go to platform first, then transferred
-      const paymentIntent = await stripe.paymentIntents.create({
-        amount: amountInCents,
-        currency: 'cad',
-        customer: customerId,
-        description: `Contract payment for: ${contract.job_title}`,
-        metadata: {
-          contract_id: contract.id,
-          job_id: contract.job_id,
-          manager_user_id: user_id,
-          entrepreneur_id: contract.entrepreneur_id,
-          platform: 'intervos'
-        },
-        // Don't transfer automatically - we'll do it when work is approved
-        automatic_payment_methods: {
-          enabled: true
-        }
-      });
-
-      // Update contract with payment intent ID
-      await pool.query(
-        `UPDATE contracts
-         SET stripe_payment_intent_id = $1, payment_status = 'processing', updated_at = NOW()
-         WHERE id = $2`,
-        [paymentIntent.id, contract.id]
-      );
-
-      // Log event
-      await pool.query(
-        `INSERT INTO contract_events (contract_id, event_type, actor_user_id, actor_role, event_data)
-         VALUES ($1, 'payment_initiated', $2, 'manager', $3)`,
-        [contract.id, user_id, JSON.stringify({ payment_intent_id: paymentIntent.id, amount: contract.contract_amount })]
-      );
-
-      console.log(`💳 Payment intent created: ${paymentIntent.id} for contract ${contract.id}`);
-
-      res.json({
-        success: true,
-        client_secret: paymentIntent.client_secret,
-        payment_intent_id: paymentIntent.id,
-        amount: contract.contract_amount,
-        currency: 'CAD'
-      });
-
-    } catch (error) {
-      console.error('❌ Create payment intent error:', error);
-      res.status(500).json({
-        error: 'Failed to create payment',
-        message: error.message
-      });
-    }
-  },
-
-  /**
-   * CONFIRM PAYMENT (Webhook handler helper)
-   * Called when payment succeeds via webhook
-   */
-  async handlePaymentSuccess(paymentIntent) {
-    const contractId = paymentIntent.metadata.contract_id;
-
-    if (!contractId) {
-      console.log('⚠️ Payment intent has no contract_id metadata');
-      return;
-    }
-
-    // Update contract status
-    await pool.query(
-      `UPDATE contracts
-       SET status = 'paid',
-           payment_status = 'succeeded',
-           stripe_charge_id = $1,
-           paid_at = NOW(),
-           updated_at = NOW()
-       WHERE id = $2`,
-      [paymentIntent.latest_charge, contractId]
-    );
-
-    // Update job status
-    const contractResult = await pool.query(
-      'SELECT job_id, entrepreneur_id FROM contracts WHERE id = $1',
-      [contractId]
-    );
-
-    if (contractResult.rows.length > 0) {
-      const { job_id, entrepreneur_id } = contractResult.rows[0];
-
-      await pool.query(
-        `UPDATE jobs SET contract_status = 'paid' WHERE id = $1`,
-        [job_id]
-      );
-
-      // Log event
-      await pool.query(
-        `INSERT INTO contract_events (contract_id, event_type, actor_role, event_data, stripe_event_id)
-         VALUES ($1, 'payment_succeeded', 'system', $2, $3)`,
-        [contractId, JSON.stringify({ charge_id: paymentIntent.latest_charge }), paymentIntent.id]
-      );
-
-      // Notify entrepreneur
-      const entrepreneurResult = await pool.query(
-        `SELECT u.id as user_id FROM entrepreneur_profiles ep
-         JOIN users u ON ep.user_id = u.id WHERE ep.id = $1`,
-        [entrepreneur_id]
-      );
-
-      if (entrepreneurResult.rows[0]) {
-        await createNotification({
-          userId: entrepreneurResult.rows[0].user_id,
-          type: 'payment_received',
-          jobId: job_id,
-          content: 'Payment has been received for your contract. You can now start the work!'
-        });
-      }
-    }
-
-    console.log(`✅ Payment confirmed for contract ${contractId}`);
   },
 
   /**
@@ -364,9 +188,9 @@ const ContractController = {
         return res.status(403).json({ error: 'Only the contractor can mark work as complete' });
       }
 
-      if (contract.status !== 'paid' && contract.status !== 'in_progress') {
+      if (contract.status !== 'active' && contract.status !== 'in_progress') {
         return res.status(400).json({
-          error: 'Contract must be paid before marking complete',
+          error: 'Contract must be active before marking complete',
           current_status: contract.status
         });
       }
@@ -431,11 +255,12 @@ const ContractController = {
   },
 
   /**
-   * APPROVE WORK & RELEASE FUNDS
-   * Manager approves work and triggers payout to entrepreneur
+   * APPROVE WORK
+   * Manager approves work completion
+   * Note: Payment is handled externally, outside the application
    * POST /api/contracts/:id/approve
    */
-  async approveAndReleaseFunds(req, res) {
+  async approveWork(req, res) {
     try {
       const { id } = req.params;
       const user_id = req.user.id;
@@ -443,7 +268,6 @@ const ContractController = {
       // Get contract and verify manager owns it
       const contractResult = await pool.query(
         `SELECT c.*, mp.user_id as manager_user_id,
-                ep.stripe_connect_account_id,
                 eu.id as entrepreneur_user_id,
                 j.title as job_title
          FROM contracts c
@@ -465,49 +289,24 @@ const ContractController = {
         return res.status(403).json({ error: 'Only the job owner can approve work' });
       }
 
-      if (contract.payment_status !== 'succeeded') {
+      if (contract.status === 'completed') {
         return res.status(400).json({
-          error: 'Payment must be completed before approving',
-          payment_status: contract.payment_status
+          error: 'Work has already been approved',
+          status: contract.status
         });
       }
 
-      if (contract.payout_status === 'completed') {
-        return res.status(400).json({
-          error: 'Funds have already been released',
-          payout_status: contract.payout_status
-        });
-      }
-
-      // Calculate payout amount in cents
-      const payoutAmountCents = Math.round(contract.entrepreneur_payout_amount * 100);
-
-      // Create transfer to entrepreneur's connected account
-      const transfer = await stripe.transfers.create({
-        amount: payoutAmountCents,
-        currency: 'cad',
-        destination: contract.stripe_connect_account_id,
-        transfer_group: `contract_${contract.id}`,
-        metadata: {
-          contract_id: contract.id,
-          job_id: contract.job_id,
-          platform: 'intervos'
-        }
-      });
-
-      // Update contract
+      // Update contract status to completed
       await pool.query(
         `UPDATE contracts
          SET status = 'completed',
-             payout_status = 'completed',
-             stripe_transfer_id = $1,
-             payout_completed_at = NOW(),
+             approved_at = NOW(),
              updated_at = NOW()
-         WHERE id = $2`,
-        [transfer.id, id]
+         WHERE id = $1`,
+        [id]
       );
 
-      // Update job
+      // Update job status
       await pool.query(
         `UPDATE jobs SET status = 'completed', contract_status = 'completed' WHERE id = $1`,
         [contract.job_id]
@@ -516,44 +315,46 @@ const ContractController = {
       // Log event
       await pool.query(
         `INSERT INTO contract_events (contract_id, event_type, actor_user_id, actor_role, event_data)
-         VALUES ($1, 'payout_completed', $2, 'manager', $3)`,
-        [id, user_id, JSON.stringify({ transfer_id: transfer.id, amount: contract.entrepreneur_payout_amount })]
+         VALUES ($1, 'work_approved', $2, 'manager', $3)`,
+        [id, user_id, JSON.stringify({ contract_amount: contract.contract_amount })]
       );
 
       // Notify entrepreneur
       await createNotification({
         userId: contract.entrepreneur_user_id,
-        type: 'payout_received',
+        type: 'work_approved',
         jobId: contract.job_id,
         jobTitle: contract.job_title,
-        content: `Payment of $${contract.entrepreneur_payout_amount.toLocaleString()} has been released to your account for "${contract.job_title}"!`
+        content: `Your work for "${contract.job_title}" has been approved! Please arrange payment with the property manager outside the application.`
       });
 
       const io = getIO();
       if (io) {
-        io.to(contract.entrepreneur_user_id.toString()).emit('payout_received', {
+        io.to(contract.entrepreneur_user_id.toString()).emit('work_approved', {
           contractId: id,
           jobId: contract.job_id,
-          amount: contract.entrepreneur_payout_amount
+          jobTitle: contract.job_title,
+          amount: contract.contract_amount
         });
       }
 
-      console.log(`💰 Payout completed for contract ${id}: ${transfer.id}`);
+      console.log(`✅ Work approved for contract ${id}`);
 
       res.json({
         success: true,
-        message: 'Work approved and funds released!',
-        payout: {
-          transfer_id: transfer.id,
-          amount: contract.entrepreneur_payout_amount,
-          currency: 'CAD'
+        message: 'Work approved successfully! Please arrange payment with the contractor outside the application.',
+        contract: {
+          id: contract.id,
+          job_id: contract.job_id,
+          contract_amount: parseFloat(contract.contract_amount),
+          status: 'completed'
         }
       });
 
     } catch (error) {
-      console.error('❌ Approve and release funds error:', error);
+      console.error('❌ Approve work error:', error);
       res.status(500).json({
-        error: 'Failed to release funds',
+        error: 'Failed to approve work',
         message: error.message
       });
     }
@@ -599,14 +400,9 @@ const ContractController = {
           job_id: contract.job_id,
           job_title: contract.job_title,
           contract_amount: parseFloat(contract.contract_amount),
-          platform_fee: parseFloat(contract.platform_fee_amount),
-          entrepreneur_payout: parseFloat(contract.entrepreneur_payout_amount),
           status: contract.status,
-          payment_status: contract.payment_status,
-          payout_status: contract.payout_status,
-          paid_at: contract.paid_at,
           work_completed_at: contract.work_completed_at,
-          payout_completed_at: contract.payout_completed_at,
+          approved_at: contract.approved_at,
           created_at: contract.created_at
         },
         manager: {
@@ -617,7 +413,9 @@ const ContractController = {
           name: `${contract.entrepreneur_first_name} ${contract.entrepreneur_last_name}`,
           company: contract.company_name,
           is_current_user: !isManager
-        }
+        },
+        // Note: Payments are handled externally, outside the application
+        payment_note: 'Payment arrangements should be made directly between the property manager and contractor.'
       });
 
     } catch (error) {
@@ -669,15 +467,13 @@ const ContractController = {
           job_title: c.job_title,
           contract_amount: parseFloat(c.contract_amount),
           status: c.status,
-          payment_status: c.payment_status,
-          payout_status: c.payout_status,
           user_role: c.user_role,
           manager_name: `${c.manager_first_name} ${c.manager_last_name}`,
           entrepreneur_name: `${c.entrepreneur_first_name} ${c.entrepreneur_last_name}`,
           company_name: c.company_name,
           created_at: c.created_at,
-          paid_at: c.paid_at,
-          payout_completed_at: c.payout_completed_at
+          work_completed_at: c.work_completed_at,
+          approved_at: c.approved_at
         })),
         total: result.rows.length
       });
@@ -685,137 +481,6 @@ const ContractController = {
     } catch (error) {
       console.error('❌ Get contracts error:', error);
       res.status(500).json({ error: error.message });
-    }
-  },
-
-  /**
-   * CONFIRM PAYMENT (Manual - backup for webhook)
-   * Called by frontend after successful Stripe payment
-   * POST /api/contracts/:id/confirm-payment
-   */
-  async confirmPayment(req, res) {
-    try {
-      const { id } = req.params;
-      const { payment_intent_id } = req.body;
-      const user_id = req.user.id;
-
-      // Get contract and verify manager owns it
-      const contractResult = await pool.query(
-        `SELECT c.*, mp.user_id as manager_user_id,
-                ep.user_id as entrepreneur_user_id,
-                j.title as job_title
-         FROM contracts c
-         JOIN manager_profiles mp ON c.manager_id = mp.id
-         JOIN entrepreneur_profiles ep ON c.entrepreneur_id = ep.id
-         JOIN jobs j ON c.job_id = j.id
-         WHERE c.id = $1`,
-        [id]
-      );
-
-      if (contractResult.rows.length === 0) {
-        return res.status(404).json({ error: 'Contract not found' });
-      }
-
-      const contract = contractResult.rows[0];
-
-      if (contract.manager_user_id !== user_id) {
-        return res.status(403).json({ error: 'Only the job owner can confirm payment' });
-      }
-
-      // If already paid, return success
-      if (contract.status === 'paid') {
-        return res.json({
-          success: true,
-          message: 'Payment already confirmed',
-          contract: { id: contract.id, status: 'paid' }
-        });
-      }
-
-      // Verify payment intent with Stripe
-      let paymentIntent;
-      try {
-        paymentIntent = await stripe.paymentIntents.retrieve(
-          payment_intent_id || contract.stripe_payment_intent_id
-        );
-      } catch (stripeErr) {
-        console.error('Error retrieving payment intent:', stripeErr);
-        return res.status(400).json({
-          error: 'Could not verify payment',
-          message: 'Payment intent not found or invalid'
-        });
-      }
-
-      // Check payment status
-      if (paymentIntent.status !== 'succeeded') {
-        return res.status(400).json({
-          error: 'Payment not completed',
-          payment_status: paymentIntent.status,
-          message: `Payment is ${paymentIntent.status}. Please complete the payment first.`
-        });
-      }
-
-      // Update contract status
-      await pool.query(
-        `UPDATE contracts
-         SET status = 'paid',
-             payment_status = 'succeeded',
-             stripe_charge_id = $1,
-             paid_at = NOW(),
-             updated_at = NOW()
-         WHERE id = $2`,
-        [paymentIntent.latest_charge, id]
-      );
-
-      // Update job contract_status
-      await pool.query(
-        `UPDATE jobs SET contract_status = 'paid' WHERE id = $1`,
-        [contract.job_id]
-      );
-
-      // Log contract event
-      await pool.query(
-        `INSERT INTO contract_events (contract_id, event_type, actor_user_id, actor_role, event_data)
-         VALUES ($1, 'payment_confirmed_manual', $2, 'manager', $3)`,
-        [id, user_id, JSON.stringify({ payment_intent_id: paymentIntent.id })]
-      );
-
-      // Notify entrepreneur
-      await createNotification({
-        userId: contract.entrepreneur_user_id,
-        type: 'payment_received',
-        jobId: contract.job_id,
-        jobTitle: contract.job_title,
-        content: `Payment has been received for "${contract.job_title}". You can now start the work!`
-      });
-
-      // Socket notification
-      const io = getIO();
-      if (io) {
-        io.to(contract.entrepreneur_user_id.toString()).emit('payment_received', {
-          contractId: id,
-          jobId: contract.job_id,
-          jobTitle: contract.job_title
-        });
-      }
-
-      console.log(`✅ Payment manually confirmed for contract ${id}`);
-
-      res.json({
-        success: true,
-        message: 'Payment confirmed successfully',
-        contract: {
-          id: contract.id,
-          status: 'paid',
-          payment_status: 'succeeded'
-        }
-      });
-
-    } catch (error) {
-      console.error('❌ Confirm payment error:', error);
-      res.status(500).json({
-        error: 'Failed to confirm payment',
-        message: error.message
-      });
     }
   },
 
@@ -849,11 +514,9 @@ const ContractController = {
         contract: {
           id: contract.id,
           status: contract.status,
-          payment_status: contract.payment_status,
-          payout_status: contract.payout_status,
           contract_amount: parseFloat(contract.contract_amount),
-          platform_fee: parseFloat(contract.platform_fee_amount),
-          entrepreneur_payout: parseFloat(contract.entrepreneur_payout_amount),
+          work_completed_at: contract.work_completed_at,
+          approved_at: contract.approved_at,
           is_manager: contract.manager_user_id === user_id
         }
       });

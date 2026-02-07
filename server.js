@@ -49,6 +49,7 @@ import supportRoutes from "./src/routes/supportRoutes.js";
 import disputeRoutes from "./src/routes/disputeRoutes.js";
 import geocodeRoutes from "./src/routes/geocodeRoutes.js";
 import promoterRoutes from "./src/routes/promoterRoutes.js";
+import promoCodeRoutes from "./src/routes/promoCodeRoutes.js";
 
 // ============================================
 // SOCKET SETUP
@@ -154,6 +155,7 @@ app.use("/api", registrationRoutes);
 app.use("/api", geocodeRoutes); // Geocode proxy - no auth needed for registration
 app.use("/api", debugRoutes); // DEBUG - No auth, must be before messageRoutes
 app.use("/api/admin/promoters", promoterRoutes); // Promoter management routes - must be BEFORE /api/admin
+app.use("/api/admin/promo-codes", promoCodeRoutes); // Promo code management routes
 app.use("/api/admin", adminRoutes); // Admin routes - has its own auth
 
 // PROTECTED ROUTES

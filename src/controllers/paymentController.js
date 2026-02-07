@@ -1,6 +1,7 @@
 import stripe, { stripeConfig } from '../config/stripe.js';
 import Subscription from '../models/subscriptionModel.js';
 import { Promoter, PromoCodeRedemption } from '../models/promoterModel.js';
+import PromoCode from '../models/promoCodeModel.js';
 import db from '../config/db.js';
 import * as cache from '../config/cache.js';
 import { SUBSCRIPTION_KEYS } from '../utils/cacheKeys.js';
@@ -124,6 +125,73 @@ const PaymentController = {
                         }
                     });
                 }
+
+                // Check if it's a free_access promo code from the new system
+                const promoCodeResult = await PromoCode.validate(upperCode);
+                if (promoCodeResult.valid && promoCodeResult.code_type === 'free_access') {
+                    // Get entrepreneur profile
+                    const entrepreneurQuery = await db.query(
+                        'SELECT id FROM entrepreneur_profiles WHERE user_id = $1',
+                        [user_id]
+                    );
+
+                    if (entrepreneurQuery.rows.length === 0) {
+                        return res.status(403).json({
+                            error: 'Entrepreneur account required',
+                            message: 'Only entrepreneurs can use this code'
+                        });
+                    }
+
+                    const entrepreneur_profile_id = entrepreneurQuery.rows[0].id;
+
+                    // Check if user already has an active subscription
+                    const existingSub = await Subscription.findByUserId(user_id);
+                    if (existingSub && ['active', 'trialing'].includes(existingSub.status)) {
+                        return res.status(400).json({
+                            error: 'Active subscription exists',
+                            message: 'You already have an active subscription'
+                        });
+                    }
+
+                    // Create free subscription (no Stripe needed)
+                    const now = new Date();
+                    const farFuture = new Date('2099-12-31'); // Free access indefinitely
+
+                    const subscription = await Subscription.upsert({
+                        user_id,
+                        entrepreneur_profile_id,
+                        stripe_customer_id: null,
+                        stripe_subscription_id: `promo_free_${promoCodeResult.promoCode.id}_${user_id}`,
+                        plan_type: 'premium',
+                        status: 'active',
+                        trial_end: null,
+                        current_period_start: now,
+                        current_period_end: farFuture
+                    });
+
+                    // Record promo code usage
+                    await PromoCode.recordUse(promoCodeResult.promoCode.id, user_id, subscription.id);
+
+                    console.log(`✅ Free access activated via promo code: ${upperCode} (user: ${user_id})`);
+
+                    // Invalidate subscription cache
+                    const cacheKey = `${SUBSCRIPTION_KEYS.USER_SUBSCRIPTION}:${user_id}`;
+                    cache.del(cacheKey);
+
+                    return res.json({
+                        success: true,
+                        message: 'Free access activated! You have full platform access.',
+                        is_promoter: true,
+                        subscription: {
+                            id: subscription.id,
+                            status: 'active',
+                            plan_type: 'premium',
+                            is_free_access: true,
+                            current_period_start: subscription.current_period_start,
+                            current_period_end: subscription.current_period_end
+                        }
+                    });
+                }
             }
 
             // ============================================
@@ -230,10 +298,13 @@ const PaymentController = {
 
             // Check for referral code (discount)
             let referralPromoter = null;
+            let promoCodeRecord = null;
             let stripePromoCodeId = null;
 
             if (promo_code) {
                 const upperCode = promo_code.toUpperCase().trim();
+
+                // First check old promoter referral codes
                 referralPromoter = await Promoter.findByReferralCode(upperCode);
 
                 if (referralPromoter) {
@@ -248,6 +319,14 @@ const PaymentController = {
 
                     stripePromoCodeId = referralPromoter.stripe_promo_code_id;
                     console.log(`🎟️ Applying referral code: ${upperCode} (${referralPromoter.discount_percent}% off)`);
+                } else {
+                    // Check new promo_codes table
+                    const promoCodeResult = await PromoCode.validate(upperCode);
+                    if (promoCodeResult.valid) {
+                        promoCodeRecord = promoCodeResult.promoCode;
+                        stripePromoCodeId = promoCodeRecord.stripe_promo_code_id;
+                        console.log(`🎟️ Applying promo code: ${upperCode} (${promoCodeResult.discount_percent}% off for ${promoCodeResult.discount_duration} months)`);
+                    }
                 }
             }
 
@@ -269,7 +348,8 @@ const PaymentController = {
                     entrepreneur_profile_id: entrepreneur_profile_id,
                     plan_type: plan_type,
                     promo_code: promo_code || null,
-                    promoter_id: referralPromoter?.id || null
+                    promoter_id: referralPromoter?.id || null,
+                    promo_code_id: promoCodeRecord?.id || null
                 }
             };
 
@@ -371,6 +451,27 @@ const PaymentController = {
                 }
             }
 
+            // Record promo code usage from new promo_codes table
+            if (promoCodeRecord) {
+                try {
+                    const subQuery = await db.query(
+                        'SELECT id FROM subscriptions WHERE stripe_subscription_id = $1',
+                        [subscription.id]
+                    );
+
+                    if (subQuery.rows.length > 0) {
+                        await PromoCode.recordUse(
+                            promoCodeRecord.id,
+                            user_id,
+                            subQuery.rows[0].id
+                        );
+                        console.log(`✅ Promo code usage recorded: ${promo_code} for user ${user_id}`);
+                    }
+                } catch (promoError) {
+                    console.error('⚠️ Failed to record promo code usage (subscription still successful):', promoError.message);
+                }
+            }
+
             if (plan_type === 'basic') {
                 await db.query(
                     `INSERT INTO bid_counts (entrepreneur_profile_id, period_start, period_end, bids_used, bids_limit)
@@ -406,6 +507,7 @@ const PaymentController = {
                     status: subscription.status,
                     plan_type,
                     trial_end: subscription.trial_end,
+                    current_period_start: period_start_date,
                     current_period_end: subscription.current_period_end,
                     is_trial: subscription.status === 'trialing',
                     price: plan_type === 'basic' ? '$250/month' : '$429/month'
@@ -495,44 +597,66 @@ const PaymentController = {
             }
 
             if (!['active', 'trialing'].includes(subscription.status)) {
-                return res.status(400).json({ 
+                return res.status(400).json({
                     error: 'Cannot cancel inactive subscription',
                     current_status: subscription.status
                 });
             }
 
-            const updatedSub = await stripe.subscriptions.update(
-                subscription.stripe_subscription_id,
-                { cancel_at_period_end: true }
-            );
+            let updatedSub = null;
+            let stripeError = null;
 
+            // Try to cancel on Stripe if we have a valid subscription ID
+            if (subscription.stripe_subscription_id) {
+                try {
+                    updatedSub = await stripe.subscriptions.update(
+                        subscription.stripe_subscription_id,
+                        { cancel_at_period_end: true }
+                    );
+                } catch (stripeErr) {
+                    console.error('❌ Stripe cancel error:', stripeErr.message);
+                    stripeError = stripeErr;
+                    // Continue to update local database even if Stripe fails
+                    // This handles cases where Stripe subscription was already deleted
+                }
+            }
+
+            // Update local database
             await Subscription.cancel(subscription.stripe_subscription_id);
 
             console.log(`🗑️ Subscription canceled for user ${user_id}`);
 
             // Log user activity
-            const ipAddress = req.ip || req.headers['x-forwarded-for'] || req.connection?.remoteAddress;
-            const userAgent = req.headers['user-agent'];
-            await createUserActivityLog(
-                user_id,
-                ActivityActions.SUBSCRIPTION_CANCELLED,
-                EntityTypes.SUBSCRIPTION,
-                subscription.stripe_subscription_id,
-                { plan_type: subscription.plan_type, cancel_at: updatedSub.cancel_at },
-                ipAddress,
-                userAgent
-            );
+            try {
+                const ipAddress = req.ip || req.headers['x-forwarded-for'] || req.connection?.remoteAddress;
+                const userAgent = req.headers['user-agent'];
+                await createUserActivityLog(
+                    user_id,
+                    ActivityActions.SUBSCRIPTION_CANCELLED,
+                    EntityTypes.SUBSCRIPTION,
+                    subscription.stripe_subscription_id,
+                    { plan_type: subscription.plan_type, cancel_at: updatedSub?.cancel_at },
+                    ipAddress,
+                    userAgent
+                );
+            } catch (logError) {
+                console.error('❌ Activity log error (non-fatal):', logError.message);
+            }
 
             res.json({
                 success: true,
                 message: 'Subscription will be canceled at the end of your billing period',
-                cancel_at: updatedSub.cancel_at,
-                access_until: subscription.current_period_end
+                cancel_at: updatedSub?.cancel_at || null,
+                access_until: subscription.current_period_end,
+                stripe_synced: !stripeError
             });
 
         } catch (error) {
             console.error('❌ Cancel subscription error:', error);
-            res.status(500).json({ error: error.message });
+            res.status(500).json({
+                error: 'Failed to cancel subscription',
+                message: error.message
+            });
         }
     },
 

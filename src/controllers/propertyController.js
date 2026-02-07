@@ -27,6 +27,14 @@ export const createProperty = async (req, res) => {
       });
     }
 
+    // Validate num_units (must be between 0 and 100)
+    const parsedNumUnits = parseInt(num_units) || 0;
+    if (parsedNumUnits < 0 || parsedNumUnits > 100) {
+      return res.status(400).json({
+        message: "Number of units must be between 0 and 100"
+      });
+    }
+
     // Get manager profile ID from user ID
     const managerProfile = await pool.query(
       `SELECT id FROM manager_profiles WHERE user_id = $1`,
@@ -48,7 +56,7 @@ export const createProperty = async (req, res) => {
         city,
         province: province || null,
         postal_code: postal_code || null,
-        num_units: num_units || 0,
+        num_units: parsedNumUnits,
         building_type: building_type || "Apartment",
         building_name: building_name,
         latitude: latitude || null,
@@ -247,6 +255,17 @@ export const updateProperty = async (req, res) => {
     delete updateFields.id;
     delete updateFields.manager_id;
     delete updateFields.created_at;
+
+    // Validate num_units if provided (must be between 0 and 100)
+    if (updateFields.num_units !== undefined) {
+      const parsedNumUnits = parseInt(updateFields.num_units) || 0;
+      if (parsedNumUnits < 0 || parsedNumUnits > 100) {
+        return res.status(400).json({
+          message: "Number of units must be between 0 and 100"
+        });
+      }
+      updateFields.num_units = parsedNumUnits;
+    }
 
     // Update property
     const updatedProperty = await Property.updateProperty(id, updateFields);

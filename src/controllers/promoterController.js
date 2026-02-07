@@ -1,4 +1,5 @@
 import { Promoter, PromoCodeRedemption } from '../models/promoterModel.js';
+import PromoCode from '../models/promoCodeModel.js';
 import stripe, { stripeConfig } from '../config/stripe.js';
 import db from '../config/db.js';
 
@@ -416,6 +417,32 @@ const PromoterController = {
                     discount_duration: promoterByReferral.discount_duration,
                     stripe_promo_code_id: promoterByReferral.stripe_promo_code_id,
                     message: `${promoterByReferral.discount_percent}% off for ${promoterByReferral.discount_duration} month!`
+                });
+            }
+
+            // Check if it's a promo code from the new promo_codes table
+            const promoCodeResult = await PromoCode.validate(upperCode);
+            if (promoCodeResult.valid) {
+                // Check if it's a free access code (for promoters)
+                if (promoCodeResult.code_type === 'free_access') {
+                    return res.json({
+                        valid: true,
+                        type: 'activation', // This tells frontend to skip payment
+                        promo_code_id: promoCodeResult.promoCode.id,
+                        code_type: 'free_access',
+                        message: 'Welcome! You will receive free platform access.'
+                    });
+                }
+
+                // Regular discount code
+                return res.json({
+                    valid: true,
+                    type: 'promo_code',
+                    promo_code_id: promoCodeResult.promoCode.id,
+                    discount_percent: promoCodeResult.discount_percent,
+                    discount_duration: promoCodeResult.discount_duration,
+                    stripe_promo_code_id: promoCodeResult.promoCode.stripe_promo_code_id,
+                    message: `${promoCodeResult.discount_percent}% off for ${promoCodeResult.discount_duration} month${promoCodeResult.discount_duration > 1 ? 's' : ''}!`
                 });
             }
 

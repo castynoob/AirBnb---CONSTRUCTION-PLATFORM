@@ -286,11 +286,24 @@ export const getJobsByEntrepreneurId = async (req, res) => {
   try {
     const { entrepreneur_id } = req.params;
 
-    // NOTE: manager_id is UUID, entrepreneur_id is TEXT in jobs table
+    // NOTE: jobs.entrepreneur_id stores USER ID (not entrepreneur_profiles.id)
+    // We need to first find the user_id for this entrepreneur_profile_id
+    const entrepreneurProfile = await pool.query(
+      `SELECT user_id FROM entrepreneur_profiles WHERE id = $1`,
+      [entrepreneur_id]
+    );
+
+    // If no profile found, try using the ID directly as user_id (for backwards compatibility)
+    const entrepreneurUserId = entrepreneurProfile.rows[0]?.user_id || entrepreneur_id;
+
+    console.log('🔍 getJobsByEntrepreneurId - entrepreneur_id (profile):', entrepreneur_id);
+    console.log('🔍 getJobsByEntrepreneurId - entrepreneur_user_id:', entrepreneurUserId);
+
     const result = await pool.query(
       `
       SELECT j.*,
              mp.user_id as manager_user_id,
+             u.first_name || ' ' || u.last_name as manager_name,
              p.building_name as property_name,
              p.address as property_address,
              p.city as property_city,
@@ -301,14 +314,24 @@ export const getJobsByEntrepreneurId = async (req, res) => {
              b.status as bid_status,
              b.created_at as bid_submitted_at
       FROM jobs j
-      LEFT JOIN manager_profiles mp ON j.manager_id = mp.id
+      LEFT JOIN manager_profiles mp ON j.manager_id::uuid = mp.id
+      LEFT JOIN users u ON mp.user_id = u.id
       LEFT JOIN properties p ON j.property_id::uuid = p.id
       LEFT JOIN bids b ON j.id::text = b.job_id::text AND b.entrepreneur_id::text = $1
-      WHERE j.entrepreneur_id = $1
+      WHERE j.entrepreneur_id::text = $2
       ORDER BY j.created_at DESC
       `,
-      [entrepreneur_id]
+      [entrepreneur_id, entrepreneurUserId]
     );
+
+    console.log('🔍 getJobsByEntrepreneurId - jobs found:', result.rows.length);
+    if (result.rows.length > 0) {
+      console.log('🔍 First job manager info:', {
+        manager_id: result.rows[0].manager_id,
+        manager_user_id: result.rows[0].manager_user_id,
+        manager_name: result.rows[0].manager_name
+      });
+    }
 
     res.json({
       message: "Jobs retrieved successfully",

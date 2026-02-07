@@ -17,6 +17,12 @@ export const registerEntrepreneur = async (req, res) => {
     years_in_business,
     num_employees,
     address,
+    city,
+    state,
+    province,
+    zip_code,
+    postal_code,
+    country,
     specializations,
     provider = "local", // default provider
     provider_id = null, // e.g. Google user ID
@@ -51,10 +57,26 @@ export const registerEntrepreneur = async (req, res) => {
       tokenExpires = new Date(Date.now() + 24 * 60 * 60 * 1000); // 24 hours
     }
 
+    // Validate years_in_business (must be between 0 and 100)
+    const parsedYearsInBusiness = parseInt(years_in_business) || 0;
+    if (parsedYearsInBusiness < 0 || parsedYearsInBusiness > 100) {
+      return res.status(400).json({
+        message: "Years in business must be between 0 and 100"
+      });
+    }
+
+    // Validate num_employees (must be between 0 and 100)
+    const parsedNumEmployees = parseInt(num_employees) || 0;
+    if (parsedNumEmployees < 0 || parsedNumEmployees > 100) {
+      return res.status(400).json({
+        message: "Number of employees must be between 0 and 100"
+      });
+    }
+
     // Insert new user
     const userResult = await pool.query(
-          `INSERT INTO users (email, password, first_name, last_name, role, provider, provider_id, email_verified, phone, verification_token, verification_token_expires)
-          VALUES ($1, $2, $3, $4, 'entrepreneur', $5, $6, $7, $8, $9, $10)
+          `INSERT INTO users (email, password, first_name, last_name, role, provider, provider_id, email_verified, phone, verification_token, verification_token_expires, address, city, province, postal_code, country)
+          VALUES ($1, $2, $3, $4, 'entrepreneur', $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15)
           RETURNING id, email, role, first_name, last_name, provider, provider_id`,
           [
             email,
@@ -66,7 +88,12 @@ export const registerEntrepreneur = async (req, res) => {
             provider !== "local", // email_verified is true for social login, false for local
             phone,
             verificationToken,
-            tokenExpires
+            tokenExpires,
+            address || null,
+            city || null,
+            state || province || null,
+            zip_code || postal_code || null,
+            country || null
         ]
   );
 
@@ -84,8 +111,8 @@ export const registerEntrepreneur = async (req, res) => {
         userId,
         company_name,
         license_number,
-        years_in_business || 0,
-        num_employees || 0,
+        parsedYearsInBusiness,
+        parsedNumEmployees,
         address,
         specializations || [],
         "none",
@@ -132,6 +159,12 @@ export const registerManager = async (req, res) => {
     phone,
     company_name,
     address,
+    city,
+    state,
+    province,
+    zip_code,
+    postal_code,
+    country,
     provider = "local",
     provider_id = null,
   } = req.body;
@@ -164,8 +197,8 @@ export const registerManager = async (req, res) => {
     }
 
     const userResult = await pool.query(
-          `INSERT INTO users (email, password, first_name, last_name, role, provider, provider_id, email_verified, phone, verification_token, verification_token_expires)
-          VALUES ($1, $2, $3, $4, 'property_manager', $5, $6, $7, $8, $9, $10)
+          `INSERT INTO users (email, password, first_name, last_name, role, provider, provider_id, email_verified, phone, verification_token, verification_token_expires, address, city, province, postal_code, country)
+          VALUES ($1, $2, $3, $4, 'property_manager', $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15)
           RETURNING id, email, role, first_name, last_name, provider, provider_id`,
           [
             email,
@@ -177,7 +210,12 @@ export const registerManager = async (req, res) => {
             provider !== "local", // email_verified is true for social login, false for local
             phone,
             verificationToken,
-            tokenExpires
+            tokenExpires,
+            address || null,
+            city || null,
+            state || province || null,
+            zip_code || postal_code || null,
+            country || null
         ]
     );
 
@@ -230,6 +268,12 @@ export const registerSupplier = async (req, res) => {
     phone,
     company_name,
     address,
+    city,
+    state,
+    province,
+    zip_code,
+    postal_code,
+    country,
     website,
     years_in_business,
     delivery_areas,
@@ -266,10 +310,18 @@ export const registerSupplier = async (req, res) => {
       tokenExpires = new Date(Date.now() + 24 * 60 * 60 * 1000); // 24 hours
     }
 
+    // Validate years_in_business (must be between 0 and 100)
+    const parsedYearsInBusiness = parseInt(years_in_business) || 0;
+    if (parsedYearsInBusiness < 0 || parsedYearsInBusiness > 100) {
+      return res.status(400).json({
+        message: "Years in business must be between 0 and 100"
+      });
+    }
+
     // Insert new user
     const userResult = await pool.query(
-      `INSERT INTO users (email, password, first_name, last_name, role, provider, provider_id, email_verified, phone, verification_token, verification_token_expires)
-       VALUES ($1, $2, $3, $4, 'supplier', $5, $6, $7, $8, $9, $10)
+      `INSERT INTO users (email, password, first_name, last_name, role, provider, provider_id, email_verified, phone, verification_token, verification_token_expires, address, city, province, postal_code, country)
+       VALUES ($1, $2, $3, $4, 'supplier', $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15)
        RETURNING id, email, role, first_name, last_name, provider, provider_id`,
       [
         email,
@@ -281,7 +333,12 @@ export const registerSupplier = async (req, res) => {
         provider !== "local", // email_verified is true for social login, false for local
         phone,
         verificationToken,
-        tokenExpires
+        tokenExpires,
+        address || null,
+        city || null,
+        state || province || null,
+        zip_code || postal_code || null,
+        country || null
       ]
     );
 
@@ -314,7 +371,7 @@ export const registerSupplier = async (req, res) => {
         address,
         phone,
         website || null,
-        years_in_business || 0,
+        parsedYearsInBusiness,
         deliveryAreasArray
       ]
     );
