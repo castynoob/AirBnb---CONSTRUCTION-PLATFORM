@@ -70,6 +70,38 @@ router.get('/billing-history',
 router.post('/validate-promo-code', PromoterController.validatePromoCode);
 
 // ============================================
+// QUEUED PROMO CODE ROUTES (During trial)
+// ============================================
+
+// Queue a promo code to apply after trial ends
+router.post('/queue-promo-code',
+    authenticateToken,
+    requireEntrepreneur,
+    PaymentController.queuePromoCode
+);
+
+// Apply promo code immediately (cancels trial)
+router.post('/apply-promo-now',
+    authenticateToken,
+    requireEntrepreneur,
+    PaymentController.applyPromoNow
+);
+
+// Get queued promo code
+router.get('/queued-promo',
+    authenticateToken,
+    requireEntrepreneur,
+    PaymentController.getQueuedPromo
+);
+
+// Cancel queued promo code
+router.delete('/queued-promo',
+    authenticateToken,
+    requireEntrepreneur,
+    PaymentController.cancelQueuedPromo
+);
+
+// ============================================
 // STRIPE CONFIG ROUTE (PUBLIC - No auth required)
 // ============================================
 

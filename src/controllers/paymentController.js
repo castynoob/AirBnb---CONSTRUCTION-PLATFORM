@@ -128,6 +128,24 @@ const PaymentController = {
 
                 // Check if it's a free_access promo code from the new system
                 const promoCodeResult = await PromoCode.validate(upperCode);
+
+                // If only promo_code is provided (no plan_type/payment_method_id),
+                // it must be a valid free_access code
+                if (!plan_type && !payment_method_id) {
+                    if (!promoCodeResult.valid) {
+                        return res.status(400).json({
+                            error: 'Invalid promo code',
+                            message: promoCodeResult.message || 'This promo code is invalid or has expired'
+                        });
+                    }
+                    if (promoCodeResult.code_type !== 'free_access') {
+                        return res.status(400).json({
+                            error: 'Discount code requires plan selection',
+                            message: 'This is a discount code. Please select a plan to apply the discount.'
+                        });
+                    }
+                }
+
                 if (promoCodeResult.valid && promoCodeResult.code_type === 'free_access') {
                     // Get entrepreneur profile
                     const entrepreneurQuery = await db.query(
@@ -146,10 +164,42 @@ const PaymentController = {
 
                     // Check if user already has an active subscription
                     const existingSub = await Subscription.findByUserId(user_id);
-                    if (existingSub && ['active', 'trialing'].includes(existingSub.status)) {
+
+                    // If user is on trial, return trial options instead of error
+                    if (existingSub && existingSub.status === 'trialing') {
+                        const trialEnd = new Date(existingSub.trial_end);
+                        const now = new Date();
+                        const daysRemaining = Math.ceil((trialEnd - now) / (1000 * 60 * 60 * 24));
+
+                        return res.status(200).json({
+                            requires_trial_decision: true,
+                            message: 'You are currently on a trial. Choose how to apply this promo code.',
+                            promo_code: upperCode,
+                            promo_code_id: promoCodeResult.promoCode.id,
+                            promo_type: promoCodeResult.code_type,
+                            trial_info: {
+                                trial_end: existingSub.trial_end,
+                                days_remaining: Math.max(0, daysRemaining),
+                                plan_type: existingSub.plan_type
+                            },
+                            options: {
+                                queue: {
+                                    label: 'Apply After Trial',
+                                    description: `Keep your trial and automatically apply this promo code when it ends on ${trialEnd.toLocaleDateString()}.`
+                                },
+                                apply_now: {
+                                    label: 'Apply Now',
+                                    description: 'Cancel your trial immediately and activate the promo code now. You will lose remaining trial days.',
+                                    warning: `You will lose ${Math.max(0, daysRemaining)} remaining trial days.`
+                                }
+                            }
+                        });
+                    }
+
+                    if (existingSub && existingSub.status === 'active') {
                         return res.status(400).json({
                             error: 'Active subscription exists',
-                            message: 'You already have an active subscription'
+                            message: 'You already have an active paid subscription'
                         });
                     }
 
@@ -1337,6 +1387,292 @@ const PaymentController = {
             });
         } catch (error) {
             console.error('❌ Get Stripe config error:', error);
+            res.status(500).json({ error: error.message });
+        }
+    },
+
+    /**
+     * QUEUE PROMO CODE FOR AFTER TRIAL
+     * POST /api/payments/queue-promo-code
+     * Body: { promo_code: string, promo_code_id: uuid }
+     * Queues a promo code to be applied when the user's trial ends
+     */
+    async queuePromoCode(req, res) {
+        try {
+            const { promo_code, promo_code_id } = req.body;
+            const user_id = req.user.id;
+
+            if (!promo_code || !promo_code_id) {
+                return res.status(400).json({
+                    error: 'Missing required fields',
+                    required: ['promo_code', 'promo_code_id']
+                });
+            }
+
+            // Get current subscription
+            const subscription = await Subscription.findByUserId(user_id);
+
+            if (!subscription) {
+                return res.status(404).json({ error: 'No subscription found' });
+            }
+
+            if (subscription.status !== 'trialing') {
+                return res.status(400).json({
+                    error: 'Not on trial',
+                    message: 'Promo codes can only be queued during an active trial'
+                });
+            }
+
+            // Validate promo code still exists and is valid
+            const promoCodeResult = await PromoCode.validate(promo_code.toUpperCase());
+            if (!promoCodeResult.valid) {
+                return res.status(400).json({
+                    error: 'Invalid promo code',
+                    message: promoCodeResult.message || 'This promo code is no longer valid'
+                });
+            }
+
+            // Queue the promo code
+            await db.query(
+                `UPDATE subscriptions
+                 SET queued_promo_code = $1,
+                     queued_promo_code_id = $2,
+                     queued_at = NOW(),
+                     updated_at = NOW()
+                 WHERE user_id = $3`,
+                [promo_code.toUpperCase(), promo_code_id, user_id]
+            );
+
+            const trialEnd = new Date(subscription.trial_end);
+
+            console.log(`📋 Promo code ${promo_code} queued for user ${user_id}, will apply after trial ends on ${trialEnd.toISOString()}`);
+
+            // Invalidate subscription cache
+            const cacheKey = `${SUBSCRIPTION_KEYS.USER_SUBSCRIPTION}:${user_id}`;
+            cache.del(cacheKey);
+
+            res.json({
+                success: true,
+                message: `Promo code queued! It will be automatically applied when your trial ends on ${trialEnd.toLocaleDateString()}.`,
+                queued_promo_code: promo_code.toUpperCase(),
+                trial_end: subscription.trial_end
+            });
+
+        } catch (error) {
+            console.error('❌ Queue promo code error:', error);
+            res.status(500).json({
+                error: 'Failed to queue promo code',
+                message: error.message
+            });
+        }
+    },
+
+    /**
+     * APPLY PROMO CODE NOW (CANCEL TRIAL)
+     * POST /api/payments/apply-promo-now
+     * Body: { promo_code: string }
+     * Cancels the current trial and applies the promo code immediately
+     */
+    async applyPromoNow(req, res) {
+        try {
+            const { promo_code } = req.body;
+            const user_id = req.user.id;
+
+            if (!promo_code) {
+                return res.status(400).json({
+                    error: 'Missing promo code'
+                });
+            }
+
+            const upperCode = promo_code.toUpperCase().trim();
+
+            // Validate promo code
+            const promoCodeResult = await PromoCode.validate(upperCode);
+            if (!promoCodeResult.valid) {
+                return res.status(400).json({
+                    error: 'Invalid promo code',
+                    message: promoCodeResult.message || 'This promo code is invalid or has expired'
+                });
+            }
+
+            if (promoCodeResult.code_type !== 'free_access') {
+                return res.status(400).json({
+                    error: 'Invalid promo type',
+                    message: 'Only free access promo codes can be applied immediately during trial'
+                });
+            }
+
+            // Get current subscription
+            const subscription = await Subscription.findByUserId(user_id);
+
+            if (!subscription) {
+                return res.status(404).json({ error: 'No subscription found' });
+            }
+
+            if (subscription.status !== 'trialing') {
+                return res.status(400).json({
+                    error: 'Not on trial',
+                    message: 'This action is only available during an active trial'
+                });
+            }
+
+            // Get entrepreneur profile
+            const entrepreneurQuery = await db.query(
+                'SELECT id FROM entrepreneur_profiles WHERE user_id = $1',
+                [user_id]
+            );
+
+            if (entrepreneurQuery.rows.length === 0) {
+                return res.status(403).json({
+                    error: 'Entrepreneur account required'
+                });
+            }
+
+            const entrepreneur_profile_id = entrepreneurQuery.rows[0].id;
+
+            // Cancel the Stripe trial subscription if it exists
+            if (subscription.stripe_subscription_id && !subscription.stripe_subscription_id.startsWith('promo_') && !subscription.stripe_subscription_id.startsWith('promoter_')) {
+                try {
+                    await stripe.subscriptions.cancel(subscription.stripe_subscription_id, {
+                        prorate: false
+                    });
+                    console.log(`🗑️ Cancelled Stripe trial subscription: ${subscription.stripe_subscription_id}`);
+                } catch (stripeErr) {
+                    console.error('⚠️ Error cancelling Stripe subscription:', stripeErr.message);
+                    // Continue anyway - the subscription might already be cancelled
+                }
+            }
+
+            // Create new free subscription from promo code
+            const now = new Date();
+            const farFuture = new Date('2099-12-31');
+
+            const newSubscription = await Subscription.upsert({
+                user_id,
+                entrepreneur_profile_id,
+                stripe_customer_id: subscription.stripe_customer_id,
+                stripe_subscription_id: `promo_free_${promoCodeResult.promoCode.id}_${user_id}`,
+                plan_type: 'premium',
+                status: 'active',
+                trial_end: null,
+                current_period_start: now,
+                current_period_end: farFuture
+            });
+
+            // Clear any queued promo code
+            await db.query(
+                `UPDATE subscriptions
+                 SET queued_promo_code = NULL,
+                     queued_promo_code_id = NULL,
+                     queued_at = NULL
+                 WHERE user_id = $1`,
+                [user_id]
+            );
+
+            // Record promo code usage
+            await PromoCode.recordUse(promoCodeResult.promoCode.id, user_id, newSubscription.id);
+
+            console.log(`✅ Trial cancelled and promo code ${upperCode} applied immediately for user ${user_id}`);
+
+            // Invalidate subscription cache
+            const cacheKey = `${SUBSCRIPTION_KEYS.USER_SUBSCRIPTION}:${user_id}`;
+            cache.del(cacheKey);
+
+            res.json({
+                success: true,
+                message: 'Trial cancelled and promo code applied! You now have free premium access.',
+                subscription: {
+                    id: newSubscription.id,
+                    status: 'active',
+                    plan_type: 'premium',
+                    is_free_access: true,
+                    current_period_start: newSubscription.current_period_start,
+                    current_period_end: newSubscription.current_period_end
+                }
+            });
+
+        } catch (error) {
+            console.error('❌ Apply promo now error:', error);
+            res.status(500).json({
+                error: 'Failed to apply promo code',
+                message: error.message
+            });
+        }
+    },
+
+    /**
+     * GET QUEUED PROMO CODE
+     * GET /api/payments/queued-promo
+     * Returns any queued promo code for the current user
+     */
+    async getQueuedPromo(req, res) {
+        try {
+            const user_id = req.user.id;
+
+            const result = await db.query(
+                `SELECT s.queued_promo_code, s.queued_promo_code_id, s.queued_at, s.trial_end,
+                        pc.code_type, pc.description
+                 FROM subscriptions s
+                 LEFT JOIN promo_codes pc ON s.queued_promo_code_id = pc.id
+                 WHERE s.user_id = $1 AND s.queued_promo_code IS NOT NULL`,
+                [user_id]
+            );
+
+            if (result.rows.length === 0) {
+                return res.json({ has_queued_promo: false });
+            }
+
+            const row = result.rows[0];
+
+            res.json({
+                has_queued_promo: true,
+                queued_promo: {
+                    code: row.queued_promo_code,
+                    code_type: row.code_type,
+                    description: row.description,
+                    queued_at: row.queued_at,
+                    will_apply_on: row.trial_end
+                }
+            });
+
+        } catch (error) {
+            console.error('❌ Get queued promo error:', error);
+            res.status(500).json({ error: error.message });
+        }
+    },
+
+    /**
+     * CANCEL QUEUED PROMO CODE
+     * DELETE /api/payments/queued-promo
+     * Removes a queued promo code
+     */
+    async cancelQueuedPromo(req, res) {
+        try {
+            const user_id = req.user.id;
+
+            await db.query(
+                `UPDATE subscriptions
+                 SET queued_promo_code = NULL,
+                     queued_promo_code_id = NULL,
+                     queued_at = NULL,
+                     updated_at = NOW()
+                 WHERE user_id = $1`,
+                [user_id]
+            );
+
+            console.log(`🗑️ Cancelled queued promo code for user ${user_id}`);
+
+            // Invalidate subscription cache
+            const cacheKey = `${SUBSCRIPTION_KEYS.USER_SUBSCRIPTION}:${user_id}`;
+            cache.del(cacheKey);
+
+            res.json({
+                success: true,
+                message: 'Queued promo code cancelled'
+            });
+
+        } catch (error) {
+            console.error('❌ Cancel queued promo error:', error);
             res.status(500).json({ error: error.message });
         }
     }
