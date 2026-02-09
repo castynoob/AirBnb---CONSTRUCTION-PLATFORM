@@ -616,6 +616,35 @@ const PaymentController = {
                 trialDaysRemaining = Math.max(0, daysLeft);
             }
 
+            // Check if this is a free access subscription (promo code or promoter)
+            const isFreeAccess = subscription.stripe_subscription_id?.startsWith('promo_free_') ||
+                                 subscription.stripe_subscription_id?.startsWith('promoter_');
+
+            // Get promo code info if it's a free access subscription
+            let promoCodeInfo = null;
+            if (isFreeAccess && subscription.stripe_subscription_id?.startsWith('promo_free_')) {
+                // Extract promo code ID from stripe_subscription_id (format: promo_free_{promo_id}_{user_id})
+                const parts = subscription.stripe_subscription_id.split('_');
+                if (parts.length >= 3) {
+                    const promoCodeId = parts[2];
+                    try {
+                        const promoQuery = await db.query(
+                            'SELECT code, discount_type, discount_value FROM promo_codes WHERE id = $1',
+                            [promoCodeId]
+                        );
+                        if (promoQuery.rows.length > 0) {
+                            promoCodeInfo = {
+                                code: promoQuery.rows[0].code,
+                                discount_type: promoQuery.rows[0].discount_type,
+                                discount_value: promoQuery.rows[0].discount_value
+                            };
+                        }
+                    } catch (err) {
+                        console.error('Error fetching promo code info:', err);
+                    }
+                }
+            }
+
             res.json({
                 hasSubscription: true,
                 subscription: {
@@ -623,11 +652,14 @@ const PaymentController = {
                     status: subscription.status,
                     trial_end: subscription.trial_end,
                     trial_days_remaining: trialDaysRemaining,
+                    current_period_start: subscription.current_period_start,
                     current_period_end: subscription.current_period_end,
                     cancel_at_period_end: subscription.cancel_at_period_end,
                     bids: bidsInfo,
                     is_trial: subscription.status === 'trialing',
-                    price: subscription.plan_type === 'basic' ? '$250/month' : '$429/month'
+                    is_free_access: isFreeAccess,
+                    promo_code: promoCodeInfo,
+                    price: isFreeAccess ? 'Free' : (subscription.plan_type === 'basic' ? '$250/month' : '$429/month')
                 }
             });
 
