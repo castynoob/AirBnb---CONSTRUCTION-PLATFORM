@@ -37,8 +37,10 @@ import chatRoutes from "./src/routes/chatRoutes.js";
 import emailRoutes from "./src/routes/emailRoutes.js"
 import registrationRoutes from "./src/routes/registrationRoutes.js";
 import inspectionRoutes from "./src/routes/inspectionRoutes.js";
-import supplierRoutes from "./src/routes/supplierRoutes.js";
+// SUPPLIER TEMPORARILY DISABLED — uncomment to re-enable
+// import supplierRoutes from "./src/routes/supplierRoutes.js";
 import favoriteRoutes from "./src/routes/favoriteRoutes.js";
+import statsRoutes from "./src/routes/statsRoutes.js";
 import notificationRoutes from "./src/routes/notificationRoutes.js";
 import debugRoutes from "./src/routes/debugRoutes.js";
 import residentRoutes from "./src/routes/residentRoutes.js";
@@ -153,6 +155,7 @@ app.use(express.json());
 // PUBLIC ROUTES (no auth) - must come BEFORE protected routes
 app.use("/api", registrationRoutes);
 app.use("/api", geocodeRoutes); // Geocode proxy - no auth needed for registration
+app.use("/api", statsRoutes); // Public platform stats - no auth needed
 app.use("/api", debugRoutes); // DEBUG - No auth, must be before messageRoutes
 app.use("/api/admin/promoters", promoterRoutes); // Promoter management routes - must be BEFORE /api/admin
 app.use("/api/admin/promo-codes", promoCodeRoutes); // Promo code management routes
@@ -170,7 +173,8 @@ app.use("/api/reviews", reviewRoutes);
 app.use("/api/chats", chatRoutes);
 app.use("/api/email", emailRoutes);
 app.use("/api/inspections", inspectionRoutes);
-app.use("/api", supplierRoutes);
+// SUPPLIER TEMPORARILY DISABLED — uncomment to re-enable
+// app.use("/api", supplierRoutes);
 app.use("/api", favoriteRoutes);
 app.use("/api", notificationRoutes);
 app.use("/api/residents", residentRoutes);

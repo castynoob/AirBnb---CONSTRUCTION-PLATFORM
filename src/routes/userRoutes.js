@@ -10,8 +10,9 @@ import {
   getManagerProfileByUserId,
   getEntrepreneurProfileByUserId,
   getManagerProfileById,
-  getSupplierProfileByUserId,
-  getSupplierProfileById,
+  // SUPPLIER TEMPORARILY DISABLED — uncomment to re-enable
+  // getSupplierProfileByUserId,
+  // getSupplierProfileById,
   uploadManagerProfilePicture,
   uploadEntrepreneurProfilePicture,
   deleteManagerProfilePicture,
@@ -63,7 +64,7 @@ router.get(
 router.get(
   "/entrepreneur/user/:userId",
   authenticateToken,
-  authorizeRoles("entrepreneur", "property_manager", "supplier"),
+  authorizeRoles("entrepreneur", "property_manager"), // SUPPLIER TEMPORARILY DISABLED — was: "entrepreneur", "property_manager", "supplier"
   cacheMiddleware((req) => USER_KEYS.entrepreneur(req.params.userId), TTL.ONE_HOUR),
   getEntrepreneurProfileByUserId
 );
@@ -78,27 +79,25 @@ router.get(
 );
 
 // ========================================
-// 🏭 SUPPLIER PROFILE ROUTES
+// 🏭 SUPPLIER PROFILE ROUTES — TEMPORARILY DISABLED
 // ========================================
-
-// Get supplier by user ID - CACHED (1 hour)
-// Note: Using /supplier/user/:userId to avoid conflict with /supplier/profile route in supplierRoutes
-router.get(
-  "/supplier/user/:userId",
-  authenticateToken,
-  authorizeRoles("entrepreneur", "property_manager", "supplier"),
-  cacheMiddleware((req) => USER_KEYS.supplier(req.params.userId), TTL.ONE_HOUR),
-  getSupplierProfileByUserId
-);
-
-// Get supplier by supplier profile ID - CACHED (1 hour)
-router.get(
-  "/supplier/profile/id/:supplierId",
-  authenticateToken,
-  authorizeRoles("entrepreneur", "property_manager", "supplier"),
-  cacheMiddleware((req) => USER_KEYS.supplierById(req.params.supplierId), TTL.ONE_HOUR),
-  getSupplierProfileById
-);
+// Uncomment to re-enable supplier profile routes
+//
+// router.get(
+//   "/supplier/user/:userId",
+//   authenticateToken,
+//   authorizeRoles("entrepreneur", "property_manager", "supplier"),
+//   cacheMiddleware((req) => USER_KEYS.supplier(req.params.userId), TTL.ONE_HOUR),
+//   getSupplierProfileByUserId
+// );
+//
+// router.get(
+//   "/supplier/profile/id/:supplierId",
+//   authenticateToken,
+//   authorizeRoles("entrepreneur", "property_manager", "supplier"),
+//   cacheMiddleware((req) => USER_KEYS.supplierById(req.params.supplierId), TTL.ONE_HOUR),
+//   getSupplierProfileById
+// );
 
 // ========================================
 // 📸 PROFILE PICTURE UPLOAD ROUTES
