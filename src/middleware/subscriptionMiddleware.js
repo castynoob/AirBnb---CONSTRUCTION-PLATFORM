@@ -85,6 +85,35 @@ const requireSubscription = async (req, res, next) => {
             });
         }
 
+        // Check if trial has actually expired by date (webhook may not have fired yet)
+        if (subscription.status === 'trialing' && subscription.trial_end) {
+            const now = new Date();
+            const trialEnd = new Date(subscription.trial_end);
+            if (now >= trialEnd) {
+                // Trial has expired - update status locally and notify Stripe
+                console.log(`⏰ Trial expired for user ${user_id}, trial_end: ${trialEnd.toISOString()}`);
+
+                // Update local status to past_due (Stripe will handle the actual charge)
+                try {
+                    await db.query(
+                        `UPDATE subscriptions SET status = 'past_due', updated_at = NOW() WHERE user_id = $1 AND status = 'trialing'`,
+                        [user_id]
+                    );
+                    // Invalidate cache
+                    await cache.del(cacheKey);
+                } catch (updateErr) {
+                    console.error('Error updating expired trial status:', updateErr);
+                }
+
+                return res.status(403).json({
+                    error: 'Trial expired',
+                    message: 'Your 14-day free trial has ended. Your card will be charged automatically. If payment fails, please update your payment method.',
+                    status: 'trial_expired',
+                    action: 'update_payment_method'
+                });
+            }
+        }
+
         // Attach subscription to request
         req.subscription = subscription;
         next();
@@ -111,7 +140,10 @@ const checkBidLimit = async (req, res, next) => {
             return next();
         }
 
-        // Basic plan = check bid count (30 max)
+        // Starter/Basic plan = check bid count
+        const BID_LIMITS = { starter: 15, basic: 30 };
+        const bidLimit = BID_LIMITS[subscription.plan_type] || 30;
+
         const entrepreneur_profile_id = subscription.entrepreneur_profile_id;
         const { BID_KEYS, getCurrentPeriod } = await import('../utils/cacheKeys.js');
         const currentPeriod = getCurrentPeriod();
@@ -138,11 +170,12 @@ const checkBidLimit = async (req, res, next) => {
             if (!bidCount) {
                 await db.query(
                     `INSERT INTO bid_counts (entrepreneur_profile_id, period_start, period_end, bids_used, bids_limit)
-                     VALUES ($1, $2, $3, 0, 30)`,
+                     VALUES ($1, $2, $3, 0, $4)`,
                     [
                         entrepreneur_profile_id,
                         subscription.current_period_start,
-                        subscription.current_period_end
+                        subscription.current_period_end,
+                        bidLimit
                     ]
                 );
                 bidsUsed = 0;
@@ -154,20 +187,22 @@ const checkBidLimit = async (req, res, next) => {
             await cache.set(cacheKey, bidsUsed, TTL.ONE_WEEK);
         }
 
-        // Check if 30-bid limit reached
-        if (bidsUsed >= 30) {
+        // Check if bid limit reached
+        if (bidsUsed >= bidLimit) {
+            const upgradeMsg = subscription.plan_type === 'starter'
+                ? `You have used all ${bidLimit} bids for this month. Upgrade to Basic ($250/month) or Premium ($429/month) for more bids.`
+                : `You have used all ${bidLimit} bids for this month. Upgrade to Premium for unlimited bids.`;
             return res.status(403).json({
                 error: 'Bid limit reached',
-                message: 'You have used all 30 bids for this month. Upgrade to Premium for unlimited bids.',
+                message: upgradeMsg,
                 bids_used: bidsUsed,
-                bids_limit: 30,
-                upgrade_price: '$429/month',
-                action: 'upgrade_to_premium'
+                bids_limit: bidLimit,
+                action: 'upgrade_plan'
             });
         }
 
         req.canBid = true;
-        req.bidsRemaining = 30 - bidsUsed;
+        req.bidsRemaining = bidLimit - bidsUsed;
         next();
 
     } catch (error) {

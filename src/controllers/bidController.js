@@ -33,6 +33,23 @@ export const submitBid = async (req, res) => {
 
     const entrepreneur_id = req.entrepreneur_profile_id;
 
+    // Starter plan: cannot bid on projects over $2,500
+    if (req.subscription.plan_type === 'starter') {
+      const jobBudgetQuery = await pool.query(
+        `SELECT budget FROM jobs WHERE id = $1`,
+        [job_id]
+      );
+      if (jobBudgetQuery.rows[0]) {
+        const jobBudget = parseFloat(jobBudgetQuery.rows[0].budget);
+        if (jobBudget > 2500) {
+          return res.status(403).json({
+            message: "Starter plan cannot bid on projects over $2,500. Upgrade to Basic or Premium to bid on larger projects.",
+            action: 'upgrade_plan'
+          });
+        }
+      }
+    }
+
     // Note: Stripe Connect onboarding is optional at bid time
     // Entrepreneur will be prompted to complete it after bid approval
     console.log('\n🔍 Checking for existing bid...');
@@ -75,12 +92,13 @@ export const submitBid = async (req, res) => {
 
     console.log('✅ Bid created successfully:', newBid.id);
 
-    // Increment bid count for basic plan users
+    // Increment bid count for starter and basic plan users
     const { plan_type } = req.subscription;
-    if (plan_type === 'basic') {
+    if (plan_type === 'starter' || plan_type === 'basic') {
+      const bidLimit = plan_type === 'starter' ? 15 : 30;
       await incrementBidCount(entrepreneur_id);
       req.bidsRemaining = req.bidsRemaining - 1;
-      console.log('📊 Bid count incremented:', (30 - req.bidsRemaining) + '/30');
+      console.log(`📊 Bid count incremented: ${(bidLimit - req.bidsRemaining)}/${bidLimit}`);
     }
 
     // 🔔 Send socket notification to the property manager

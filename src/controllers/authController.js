@@ -3,7 +3,7 @@ import jwt from "jsonwebtoken";
 import dotenv from "dotenv";
 import crypto from "crypto";
 import pool from "../config/db.js";
-import { createUser, findUserByEmail } from "../models/userModel.js";
+import { createUser, findUserByEmail, findUsersByEmail, findUserByEmailAndRole } from "../models/userModel.js";
 import { createRefreshToken, findRefreshToken, deleteRefreshToken } from "../models/refreshTokenModel.js";
 import { sendVerificationEmail, sendPasswordResetEmail } from "../config/emailConfig.js";
 import {
@@ -55,66 +55,107 @@ export const register = async (req, res) => {
   }
 };
 
-// ✅ UPDATED: Login with Refresh Token
+// ✅ UPDATED: Login with Refresh Token (multi-role support)
 export const login = async (req, res) => {
   try {
-    const { email, password } = req.body;
-    const user = await findUserByEmail(email);
-
-    // Generic error message for security (don't reveal if email exists)
+    const { email, password, role } = req.body;
     const invalidMessage = "Invalid email or password";
 
-    if (!user) {
+    // If role is specified, find the specific account (phase 2 of role selection)
+    if (role) {
+      const user = await findUserByEmailAndRole(email, role);
+      if (!user) {
+        return res.status(401).json({ message: invalidMessage });
+      }
+
+      const isMatch = await bcrypt.compare(password, user.password);
+      if (!isMatch) {
+        return res.status(401).json({ message: invalidMessage });
+      }
+
+      if (!user.email_verified) {
+        return res.status(403).json({
+          message: "Please verify your email before logging in. Check your inbox for the verification link."
+        });
+      }
+
+      const accessToken = jwt.sign(
+        { id: user.id, email: user.email, role: user.role },
+        process.env.JWT_SECRET,
+        { expiresIn: "15m" }
+      );
+      const refreshToken = await createRefreshToken(user.id);
+
+      const ipAddress = req.ip || req.headers['x-forwarded-for'] || req.connection?.remoteAddress;
+      const userAgent = req.headers['user-agent'];
+      await createUserActivityLog(user.id, ActivityActions.LOGIN, EntityTypes.USER, user.id, { method: 'email_password', role_selected: role }, ipAddress, userAgent);
+
+      return res.json({
+        message: "Login successful",
+        accessToken,
+        refreshToken,
+        user: { id: user.id, email: user.email, role: user.role, first_name: user.first_name, last_name: user.last_name },
+      });
+    }
+
+    // No role specified - find all accounts for this email
+    const users = await findUsersByEmail(email);
+
+    if (users.length === 0) {
       return res.status(401).json({ message: invalidMessage });
     }
 
-    const isMatch = await bcrypt.compare(password, user.password);
+    // Verify password against first account (passwords should be synced across roles)
+    const isMatch = await bcrypt.compare(password, users[0].password);
     if (!isMatch) {
       return res.status(401).json({ message: invalidMessage });
     }
 
-    // Check if email is verified (after password check for security)
-    if (!user.email_verified) {
+    // Filter to verified accounts only
+    const verifiedUsers = users.filter(u => u.email_verified);
+
+    // If ALL accounts are unverified
+    if (verifiedUsers.length === 0) {
       return res.status(403).json({
         message: "Please verify your email before logging in. Check your inbox for the verification link."
       });
     }
 
-    // Create short-lived access token (15 minutes)
-    const accessToken = jwt.sign(
-      { id: user.id, email: user.email, role: user.role },
-      process.env.JWT_SECRET,
-      { expiresIn: "15m" }
-    );
+    // Single verified account - login directly (same as before)
+    if (verifiedUsers.length === 1) {
+      const user = verifiedUsers[0];
+      const accessToken = jwt.sign(
+        { id: user.id, email: user.email, role: user.role },
+        process.env.JWT_SECRET,
+        { expiresIn: "15m" }
+      );
+      const refreshToken = await createRefreshToken(user.id);
 
-    // Create long-lived refresh token (7 days)
-    const refreshToken = await createRefreshToken(user.id);
+      const ipAddress = req.ip || req.headers['x-forwarded-for'] || req.connection?.remoteAddress;
+      const userAgent = req.headers['user-agent'];
+      await createUserActivityLog(user.id, ActivityActions.LOGIN, EntityTypes.USER, user.id, { method: 'email_password' }, ipAddress, userAgent);
 
-    // Log user activity
-    const ipAddress = req.ip || req.headers['x-forwarded-for'] || req.connection?.remoteAddress;
-    const userAgent = req.headers['user-agent'];
-    await createUserActivityLog(
-      user.id,
-      ActivityActions.LOGIN,
-      EntityTypes.USER,
-      user.id,
-      { method: 'email_password' },
-      ipAddress,
-      userAgent
-    );
+      return res.json({
+        message: "Login successful",
+        accessToken,
+        refreshToken,
+        user: { id: user.id, email: user.email, role: user.role, first_name: user.first_name, last_name: user.last_name },
+      });
+    }
 
-    res.json({
-      message: "Login successful",
-      accessToken,
-      refreshToken,
-      user: {
-        id: user.id,
-        email: user.email,
-        role: user.role,
-        first_name: user.first_name,
-        last_name: user.last_name
-      },
+    // Multiple verified accounts - return role selection prompt
+    const accounts = verifiedUsers.map(u => ({
+      role: u.role,
+      first_name: u.first_name,
+      last_name: u.last_name,
+    }));
+
+    return res.json({
+      requiresRoleSelection: true,
+      message: "Multiple accounts found. Please select which account to log into.",
+      accounts,
     });
+
   } catch (err) {
     console.error("❌ Login error:", err);
     res.status(500).json({ message: "Server error" });
@@ -344,37 +385,37 @@ export const requestPasswordReset = async (req, res) => {
       return res.status(400).json({ message: "Email is required" });
     }
 
-    const user = await findUserByEmail(email);
+    const users = await findUsersByEmail(email);
 
-    if (!user) {
+    if (users.length === 0) {
       // Security: Don't reveal if email exists
-      return res.json({ 
-        message: "If your email is registered, you will receive a password reset link" 
+      return res.json({
+        message: "If your email is registered, you will receive a password reset link"
       });
     }
 
-    // Generate reset token
+    // Generate reset token and set it on ALL user rows for this email
     const resetToken = crypto.randomBytes(32).toString('hex');
     const tokenExpires = new Date(Date.now() + 1 * 60 * 60 * 1000); // 1 hour
 
     await pool.query(
-      `UPDATE users 
-       SET reset_token = $1, reset_token_expires = $2 
-       WHERE id = $3`,
-      [resetToken, tokenExpires, user.id]
+      `UPDATE users
+       SET reset_token = $1, reset_token_expires = $2
+       WHERE LOWER(email) = LOWER($3)`,
+      [resetToken, tokenExpires, email]
     );
 
     // Send reset email
     await sendPasswordResetEmail(email, resetToken);
 
-    // Log user activity
+    // Log activity for first user
     const ipAddress = req.ip || req.headers['x-forwarded-for'] || req.connection?.remoteAddress;
     const userAgent = req.headers['user-agent'];
     await createUserActivityLog(
-      user.id,
+      users[0].id,
       ActivityActions.PASSWORD_RESET_REQUESTED,
       EntityTypes.USER,
-      user.id,
+      users[0].id,
       null,
       ipAddress,
       userAgent
@@ -483,29 +524,30 @@ export const resetPassword = async (req, res) => {
 
     // Find user with valid reset token
     const user = await pool.query(
-      `SELECT id FROM users 
-       WHERE reset_token = $1 
-         AND reset_token_expires > NOW()`,
+      `SELECT id, email FROM users
+       WHERE reset_token = $1
+         AND reset_token_expires > NOW()
+       LIMIT 1`,
       [token]
     );
 
     if (user.rows.length === 0) {
-      return res.status(400).json({ 
-        message: "Invalid or expired reset token" 
+      return res.status(400).json({
+        message: "Invalid or expired reset token"
       });
     }
 
     // Hash new password
     const hashedPassword = await bcrypt.hash(newPassword, 10);
 
-    // Update password and clear reset token
+    // Update password and clear reset token for ALL accounts with this email
     await pool.query(
       `UPDATE users
        SET password = $1,
            reset_token = NULL,
            reset_token_expires = NULL
-       WHERE id = $2`,
-      [hashedPassword, user.rows[0].id]
+       WHERE LOWER(email) = LOWER($2)`,
+      [hashedPassword, user.rows[0].email]
     );
 
     // Log user activity
@@ -634,59 +676,85 @@ export const changePassword = async (req, res) => {
 // 🆕 NEW: Google Login
 export const googleLogin = async (req, res) => {
     try {
-        const { email } = req.body;
-        
-        // 1. Find user by email
-        const user = await findUserByEmail(email);
+        const { email, role } = req.body;
 
-        if (!user) {
-            // User not registered (FE will prompt registration)
-            return res.status(404).json({ 
-                message: "User not found. Please register." 
+        // Find all accounts for this email
+        const users = await findUsersByEmail(email);
+
+        if (users.length === 0) {
+            return res.status(404).json({
+                message: "User not found. Please register."
             });
         }
-        
-        // Check if email is verified (standard login check)
-        if (!user.email_verified) {
-            return res.status(403).json({ 
-                message: "Please verify your email before logging in" 
+
+        // If role specified, find that specific account
+        if (role) {
+            const user = users.find(u => u.role === role);
+            if (!user) {
+                return res.status(404).json({ message: "Account not found for this role." });
+            }
+
+            const accessToken = jwt.sign(
+                { id: user.id, email: user.email, role: user.role },
+                process.env.JWT_SECRET,
+                { expiresIn: "15m" }
+            );
+            const refreshToken = await createRefreshToken(user.id);
+
+            const ipAddress = req.ip || req.headers['x-forwarded-for'] || req.connection?.remoteAddress;
+            const userAgent = req.headers['user-agent'];
+            await createUserActivityLog(user.id, ActivityActions.LOGIN, EntityTypes.USER, user.id, { method: 'google', role_selected: role }, ipAddress, userAgent);
+
+            return res.json({
+                message: "Google login successful",
+                accessToken,
+                refreshToken,
+                user: { id: user.id, email: user.email, role: user.role, first_name: user.first_name, last_name: user.last_name },
             });
         }
-        
-        // 2. Create short-lived access token (15 minutes)
-        const accessToken = jwt.sign(
-            { id: user.id, email: user.email, role: user.role },
-            process.env.JWT_SECRET,
-            { expiresIn: "15m" }
-        );
 
-        // 3. Create long-lived refresh token (7 days)
-        const refreshToken = await createRefreshToken(user.id);
+        // No role specified - check how many verified accounts
+        const verifiedUsers = users.filter(u => u.email_verified);
 
-        // Log user activity
-        const ipAddress = req.ip || req.headers['x-forwarded-for'] || req.connection?.remoteAddress;
-        const userAgent = req.headers['user-agent'];
-        await createUserActivityLog(
-          user.id,
-          ActivityActions.LOGIN,
-          EntityTypes.USER,
-          user.id,
-          { method: 'google' },
-          ipAddress,
-          userAgent
-        );
+        if (verifiedUsers.length === 0) {
+            return res.status(403).json({
+                message: "Please verify your email before logging in"
+            });
+        }
 
-        res.json({
-            message: "Google login successful",
-            accessToken,
-            refreshToken,
-            user: {
-                id: user.id,
-                email: user.email,
-                role: user.role,
-                first_name: user.first_name,
-                last_name: user.last_name
-            },
+        // Single account - login directly
+        if (verifiedUsers.length === 1) {
+            const user = verifiedUsers[0];
+            const accessToken = jwt.sign(
+                { id: user.id, email: user.email, role: user.role },
+                process.env.JWT_SECRET,
+                { expiresIn: "15m" }
+            );
+            const refreshToken = await createRefreshToken(user.id);
+
+            const ipAddress = req.ip || req.headers['x-forwarded-for'] || req.connection?.remoteAddress;
+            const userAgent = req.headers['user-agent'];
+            await createUserActivityLog(user.id, ActivityActions.LOGIN, EntityTypes.USER, user.id, { method: 'google' }, ipAddress, userAgent);
+
+            return res.json({
+                message: "Google login successful",
+                accessToken,
+                refreshToken,
+                user: { id: user.id, email: user.email, role: user.role, first_name: user.first_name, last_name: user.last_name },
+            });
+        }
+
+        // Multiple accounts - return role selection
+        const accounts = verifiedUsers.map(u => ({
+            role: u.role,
+            first_name: u.first_name,
+            last_name: u.last_name,
+        }));
+
+        return res.json({
+            requiresRoleSelection: true,
+            message: "Multiple accounts found. Please select which account to log into.",
+            accounts,
         });
 
     } catch (err) {

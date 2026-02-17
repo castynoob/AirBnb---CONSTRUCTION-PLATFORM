@@ -1405,8 +1405,8 @@ export const changePlanHandler = async (req, res) => {
     const { id } = req.params;
     const { planType } = req.body;
 
-    if (!['basic', 'premium'].includes(planType)) {
-      return res.status(400).json({ message: "Invalid plan type. Must be 'basic' or 'premium'" });
+    if (!['starter', 'basic', 'premium'].includes(planType)) {
+      return res.status(400).json({ message: "Invalid plan type. Must be 'starter', 'basic', or 'premium'" });
     }
 
     const subscription = await changeSubscriptionPlan(id, planType);

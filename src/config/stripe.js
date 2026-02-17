@@ -18,6 +18,10 @@ const STRIPE_WEBHOOK_SECRET = isLiveMode
     : process.env.STRIPE_WEBHOOK_SECRET_TEST;
 
 // Price IDs based on mode
+const STRIPE_PRICE_ID_STARTER = isLiveMode
+    ? process.env.STRIPE_PRICE_ID_STARTER_LIVE
+    : process.env.STRIPE_PRICE_ID_STARTER_TEST;
+
 const STRIPE_PRICE_ID_BASIC = isLiveMode
     ? process.env.STRIPE_PRICE_ID_BASIC_LIVE
     : process.env.STRIPE_PRICE_ID_BASIC_TEST;
@@ -39,6 +43,7 @@ export const stripeConfig = {
     publishableKey: STRIPE_PUBLISHABLE_KEY,
     webhookSecret: STRIPE_WEBHOOK_SECRET,
     priceIds: {
+        starter: STRIPE_PRICE_ID_STARTER,
         basic: STRIPE_PRICE_ID_BASIC,
         premium: STRIPE_PRICE_ID_PREMIUM
     }

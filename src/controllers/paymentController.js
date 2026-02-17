@@ -14,6 +14,13 @@ import { notifyPromoterOfReferral } from '../services/promoterNotificationServic
 
 // ✅ DYNAMIC - Price IDs are loaded from stripeConfig based on STRIPE_MODE
 const PLANS = {
+    starter: {
+        price_id: stripeConfig.priceIds.starter,
+        name: 'Starter Entrepreneur Plan',
+        price: 89,
+        interval: 'month',
+        bids_limit: 15
+    },
     basic: {
         price_id: stripeConfig.priceIds.basic,
         name: 'Basic Entrepreneur Plan',
@@ -32,6 +39,7 @@ const PLANS = {
 
 // Log which price IDs are being used
 console.log(`📋 Using Price IDs (${stripeConfig.mode} mode):`, {
+    starter: PLANS.starter.price_id,
     basic: PLANS.basic.price_id,
     premium: PLANS.premium.price_id
 });
@@ -255,10 +263,10 @@ const PaymentController = {
                 });
             }
 
-            if (!['basic', 'premium'].includes(plan_type)) {
+            if (!['starter', 'basic', 'premium'].includes(plan_type)) {
                 return res.status(400).json({
                     error: 'Invalid plan type',
-                    message: 'Plan must be "basic" or "premium"'
+                    message: 'Plan must be "starter", "basic", or "premium"'
                 });
             }
 
@@ -522,14 +530,16 @@ const PaymentController = {
                 }
             }
 
-            if (plan_type === 'basic') {
+            if (plan_type === 'starter' || plan_type === 'basic') {
+                const bidsLimit = plan_type === 'starter' ? 15 : 30;
                 await db.query(
                     `INSERT INTO bid_counts (entrepreneur_profile_id, period_start, period_end, bids_used, bids_limit)
-                    VALUES ($1, $2, $3, 0, 30)`,
+                    VALUES ($1, $2, $3, 0, $4)`,
                     [
                         entrepreneur_profile_id,
                         period_start_date,
-                        period_end_date
+                        period_end_date,
+                        bidsLimit
                     ]
                 );
             }
@@ -560,7 +570,7 @@ const PaymentController = {
                     current_period_start: period_start_date,
                     current_period_end: subscription.current_period_end,
                     is_trial: subscription.status === 'trialing',
-                    price: plan_type === 'basic' ? '$250/month' : '$429/month'
+                    price: `$${PLANS[plan_type].price}/month`
                 }
             });
 
@@ -587,7 +597,7 @@ const PaymentController = {
             }
 
             let bidsInfo = null;
-            if (subscription.plan_type === 'basic' && subscription.entrepreneur_profile_id) {
+            if ((subscription.plan_type === 'starter' || subscription.plan_type === 'basic') && subscription.entrepreneur_profile_id) {
                 const bidCountQuery = await db.query(
                     `SELECT bids_limit, bids_used, (bids_limit - bids_used) as remaining
                      FROM bid_counts 
@@ -659,7 +669,7 @@ const PaymentController = {
                     is_trial: subscription.status === 'trialing',
                     is_free_access: isFreeAccess,
                     promo_code: promoCodeInfo,
-                    price: isFreeAccess ? 'Free' : (subscription.plan_type === 'basic' ? '$250/month' : '$429/month')
+                    price: isFreeAccess ? 'Free' : (subscription.plan_type === 'starter' ? '$89/month' : subscription.plan_type === 'basic' ? '$250/month' : '$429/month')
                 }
             });
 
@@ -964,6 +974,7 @@ const PaymentController = {
                     CASE
                         WHEN s.plan_type = 'premium' THEN 429.00
                         WHEN s.plan_type = 'basic' THEN 250.00
+                        WHEN s.plan_type = 'starter' THEN 89.00
                         ELSE 0
                     END as amount,
                     'subscription' as payment_type
@@ -996,7 +1007,7 @@ const PaymentController = {
             const subscriptionPayments = subscriptionQuery.rows.map(sub => ({
                 id: sub.id,
                 type: 'subscription',
-                description: `${sub.plan_type === 'premium' ? 'Premium' : 'Basic'} Plan Subscription`,
+                description: `${sub.plan_type === 'premium' ? 'Premium' : sub.plan_type === 'starter' ? 'Starter' : 'Basic'} Plan Subscription`,
                 amount: parseFloat(sub.amount),
                 status: sub.status,
                 date: sub.created_at,

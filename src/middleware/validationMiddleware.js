@@ -37,9 +37,10 @@ export const validateRegistration = [
     .isLength({ max: 255 })
     .withMessage("Email is too long"),
 
-  // Password validation - ONLY for local registration
+  // Password validation - ONLY for local registration when password is provided
+  // (password is optional when registering a new role for an existing email)
   body("password")
-    .if((value, { req }) => req.body.provider === "local" || !req.body.provider)
+    .if((value, { req }) => (req.body.provider === "local" || !req.body.provider) && value)
     .isLength({ min: 8, max: 128 })
     .withMessage("Password must be between 8 and 128 characters")
     .custom(validatePasswordStrength),

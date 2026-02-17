@@ -11,6 +11,30 @@ export const findUserByEmail = async (email) => {
   return result.rows[0];
 };
 
+// Returns ALL user rows for an email (for multi-role support)
+export const findUsersByEmail = async (email) => {
+  const result = await pool.query(
+    `SELECT id, email, password, role, first_name, middle_name, last_name,
+            phone, email_verified, created_at, updated_at
+     FROM users
+     WHERE LOWER(email) = LOWER($1)`,
+    [email]
+  );
+  return result.rows;
+};
+
+// Find a specific user by email AND role
+export const findUserByEmailAndRole = async (email, role) => {
+  const result = await pool.query(
+    `SELECT id, email, password, role, first_name, middle_name, last_name,
+            phone, email_verified, created_at, updated_at
+     FROM users
+     WHERE LOWER(email) = LOWER($1) AND role = $2`,
+    [email, role]
+  );
+  return result.rows[0];
+};
+
 export const createUser = async ({ email, password, first_name, last_name, role }) => {
   await pool.query(
     `INSERT INTO users (email, password, first_name, last_name, role)

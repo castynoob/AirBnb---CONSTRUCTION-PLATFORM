@@ -1,7 +1,7 @@
 // ✅ src/routes/registrationRoutes.js
 import express from "express";
 // SUPPLIER TEMPORARILY DISABLED — add registerSupplier back to re-enable
-import { registerEntrepreneur, registerManager, registerResident, checkDuplicates  } from "../controllers/registrationController.js";
+import { registerEntrepreneur, registerManager, registerResident, checkDuplicates, checkEmailExists } from "../controllers/registrationController.js";
 import { validateRegistration } from "../middleware/validationMiddleware.js";
 
 const router = express.Router();
@@ -14,5 +14,8 @@ router.post("/register/resident", registerResident);
 
 // Check for duplicate license number or phone
 router.post("/register/check-duplicates", checkDuplicates);
+
+// Check if email already has an account (for multi-role registration)
+router.post("/register/check-email", checkEmailExists);
 
 export default router;

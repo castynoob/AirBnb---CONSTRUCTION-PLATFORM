@@ -29,32 +29,44 @@ export const registerEntrepreneur = async (req, res) => {
   } = req.body;
 
   try {
-    // Check if email already exists
+    // Check if email already has an entrepreneur account
     const existingUser = await pool.query(
-      "SELECT id FROM users WHERE email = $1",
+      "SELECT id FROM users WHERE LOWER(email) = LOWER($1) AND role = 'entrepreneur'",
       [email]
     );
     if (existingUser.rows.length > 0) {
-      return res.status(400).json({ message: "Email already registered" });
+      return res.status(400).json({ message: "You already have an Entrepreneur account with this email." });
     }
+
+    // Check if this email already has another role account (for password sync & auto-verify)
+    const existingAccount = await pool.query(
+      "SELECT password, email_verified FROM users WHERE LOWER(email) = LOWER($1) LIMIT 1",
+      [email]
+    );
+    const hasExistingAccount = existingAccount.rows.length > 0 && existingAccount.rows[0].password;
 
     // Handle password logic
     let hashedPassword = null;
     if (provider === "local") {
-      if (!password) {
-        return res
-          .status(400)
-          .json({ message: "Password is required for local registration" });
+      if (hasExistingAccount) {
+        hashedPassword = existingAccount.rows[0].password;
+      } else if (!password) {
+        return res.status(400).json({ message: "Password is required for local registration" });
+      } else {
+        hashedPassword = await bcrypt.hash(password, 10);
       }
-      hashedPassword = await bcrypt.hash(password, 10);
     }
 
     // Generate verification token for local registrations
     let verificationToken = null;
     let tokenExpires = null;
     if (provider === "local") {
-      verificationToken = crypto.randomBytes(32).toString('hex');
-      tokenExpires = new Date(Date.now() + 24 * 60 * 60 * 1000); // 24 hours
+      if (existingAccount.rows.length > 0 && existingAccount.rows[0].email_verified) {
+        // Already verified with another role - skip verification
+      } else {
+        verificationToken = crypto.randomBytes(32).toString('hex');
+        tokenExpires = new Date(Date.now() + 24 * 60 * 60 * 1000); // 24 hours
+      }
     }
 
     // Validate years_in_business (must be between 0 and 100)
@@ -85,7 +97,7 @@ export const registerEntrepreneur = async (req, res) => {
             last_name,
             provider,
             provider_id,
-            provider !== "local", // email_verified is true for social login, false for local
+            provider !== "local" || !verificationToken, // auto-verify if social login or existing verified account
             phone,
             verificationToken,
             tokenExpires,
@@ -133,15 +145,17 @@ export const registerEntrepreneur = async (req, res) => {
       }
     }
 
+    const autoVerified = provider === "local" && !verificationToken;
     res.status(201).json({
-      message: provider === "local"
-        ? emailSent
+      message: provider !== "local" || autoVerified
+        ? "Entrepreneur registered successfully."
+        : emailSent
           ? "Entrepreneur registered successfully. Please check your email to verify your account."
-          : "Entrepreneur registered successfully. Verification email will be sent shortly."
-        : "Entrepreneur registered successfully",
+          : "Entrepreneur registered successfully. Verification email will be sent shortly.",
       user: userResult.rows[0],
       profile: profileResult.rows[0],
       emailSent,
+      autoVerified,
     });
   } catch (error) {
     console.error("Error registering entrepreneur:", error);
@@ -170,30 +184,43 @@ export const registerManager = async (req, res) => {
   } = req.body;
 
   try {
+    // Check if email already has a property manager account
     const existingUser = await pool.query(
-      "SELECT id FROM users WHERE email = $1",
+      "SELECT id FROM users WHERE LOWER(email) = LOWER($1) AND role = 'property_manager'",
       [email]
     );
     if (existingUser.rows.length > 0) {
-      return res.status(400).json({ message: "Email already registered" });
+      return res.status(400).json({ message: "You already have a Property Manager account with this email." });
     }
+
+    // Check if this email already has another role account (for password sync & auto-verify)
+    const existingAccount = await pool.query(
+      "SELECT password, email_verified FROM users WHERE LOWER(email) = LOWER($1) LIMIT 1",
+      [email]
+    );
+    const hasExistingAccount = existingAccount.rows.length > 0 && existingAccount.rows[0].password;
 
     let hashedPassword = null;
     if (provider === "local") {
-      if (!password) {
-        return res
-          .status(400)
-          .json({ message: "Password is required for local registration" });
+      if (hasExistingAccount) {
+        hashedPassword = existingAccount.rows[0].password;
+      } else if (!password) {
+        return res.status(400).json({ message: "Password is required for local registration" });
+      } else {
+        hashedPassword = await bcrypt.hash(password, 10);
       }
-      hashedPassword = await bcrypt.hash(password, 10);
     }
 
     // Generate verification token for local registrations
     let verificationToken = null;
     let tokenExpires = null;
     if (provider === "local") {
-      verificationToken = crypto.randomBytes(32).toString('hex');
-      tokenExpires = new Date(Date.now() + 24 * 60 * 60 * 1000); // 24 hours
+      if (existingAccount.rows.length > 0 && existingAccount.rows[0].email_verified) {
+        // Already verified with another role - skip verification
+      } else {
+        verificationToken = crypto.randomBytes(32).toString('hex');
+        tokenExpires = new Date(Date.now() + 24 * 60 * 60 * 1000); // 24 hours
+      }
     }
 
     const userResult = await pool.query(
@@ -207,7 +234,7 @@ export const registerManager = async (req, res) => {
             last_name,
             provider,
             provider_id,
-            provider !== "local", // email_verified is true for social login, false for local
+            provider !== "local" || !verificationToken, // auto-verify if social login or existing verified account
             phone,
             verificationToken,
             tokenExpires,
@@ -242,15 +269,17 @@ export const registerManager = async (req, res) => {
       }
     }
 
+    const autoVerified = provider === "local" && !verificationToken;
     res.status(201).json({
-      message: provider === "local"
-        ? emailSent
+      message: provider !== "local" || autoVerified
+        ? "Property manager registered successfully."
+        : emailSent
           ? "Property manager registered successfully. Please check your email to verify your account."
-          : "Property manager registered successfully. Verification email will be sent shortly."
-        : "Property manager registered successfully",
+          : "Property manager registered successfully. Verification email will be sent shortly.",
       user: userResult.rows[0],
       profile: profileResult.rows[0],
       emailSent,
+      autoVerified,
     });
   } catch (error) {
     console.error("Error registering manager:", error);
@@ -282,32 +311,44 @@ export const registerSupplier = async (req, res) => {
   } = req.body;
 
   try {
-    // Check if email already exists
+    // Check if email already has a supplier account
     const existingUser = await pool.query(
-      "SELECT id FROM users WHERE email = $1",
+      "SELECT id FROM users WHERE LOWER(email) = LOWER($1) AND role = 'supplier'",
       [email]
     );
     if (existingUser.rows.length > 0) {
-      return res.status(400).json({ message: "Email already registered" });
+      return res.status(400).json({ message: "You already have a Supplier account with this email." });
     }
+
+    // Check if this email already has another role account (for password sync & auto-verify)
+    const existingAccount = await pool.query(
+      "SELECT password, email_verified FROM users WHERE LOWER(email) = LOWER($1) LIMIT 1",
+      [email]
+    );
+    const hasExistingAccount = existingAccount.rows.length > 0 && existingAccount.rows[0].password;
 
     // Handle password logic
     let hashedPassword = null;
     if (provider === "local") {
-      if (!password) {
-        return res
-          .status(400)
-          .json({ message: "Password is required for local registration" });
+      if (hasExistingAccount) {
+        hashedPassword = existingAccount.rows[0].password;
+      } else if (!password) {
+        return res.status(400).json({ message: "Password is required for local registration" });
+      } else {
+        hashedPassword = await bcrypt.hash(password, 10);
       }
-      hashedPassword = await bcrypt.hash(password, 10);
     }
 
     // Generate verification token for local registrations
     let verificationToken = null;
     let tokenExpires = null;
     if (provider === "local") {
-      verificationToken = crypto.randomBytes(32).toString('hex');
-      tokenExpires = new Date(Date.now() + 24 * 60 * 60 * 1000); // 24 hours
+      if (existingAccount.rows.length > 0 && existingAccount.rows[0].email_verified) {
+        // Already verified with another role - skip verification
+      } else {
+        verificationToken = crypto.randomBytes(32).toString('hex');
+        tokenExpires = new Date(Date.now() + 24 * 60 * 60 * 1000); // 24 hours
+      }
     }
 
     // Validate years_in_business (must be between 0 and 100)
@@ -330,7 +371,7 @@ export const registerSupplier = async (req, res) => {
         last_name,
         provider,
         provider_id,
-        provider !== "local", // email_verified is true for social login, false for local
+        provider !== "local" || !verificationToken, // auto-verify if social login or existing verified account
         phone,
         verificationToken,
         tokenExpires,
@@ -390,12 +431,13 @@ export const registerSupplier = async (req, res) => {
       }
     }
 
+    const autoVerified = provider === "local" && !verificationToken;
     res.status(201).json({
-      message: provider === "local"
-        ? emailSent
+      message: provider !== "local" || autoVerified
+        ? "Supplier registered successfully."
+        : emailSent
           ? "Supplier registered successfully. Please check your email to verify your account."
-          : "Supplier registered successfully. Verification email will be sent shortly."
-        : "Supplier registered successfully",
+          : "Supplier registered successfully. Verification email will be sent shortly.",
       user: userResult.rows[0],
       profile: profileResult.rows[0],
       emailSent,
@@ -444,32 +486,44 @@ export const registerResident = async (req, res) => {
       });
     }
 
-    // Check if email already exists
+    // Check if email already has a resident account
     const existingUser = await pool.query(
-      "SELECT id FROM users WHERE email = $1",
+      "SELECT id FROM users WHERE LOWER(email) = LOWER($1) AND role = 'resident'",
       [email]
     );
     if (existingUser.rows.length > 0) {
-      return res.status(400).json({ message: "Email already registered" });
+      return res.status(400).json({ message: "You already have a Resident account with this email." });
     }
+
+    // Check if this email already has another role account (for password sync & auto-verify)
+    const existingAccount = await pool.query(
+      "SELECT password, email_verified FROM users WHERE LOWER(email) = LOWER($1) LIMIT 1",
+      [email]
+    );
+    const hasExistingAccount = existingAccount.rows.length > 0 && existingAccount.rows[0].password;
 
     // Handle password logic
     let hashedPassword = null;
     if (provider === "local") {
-      if (!password) {
-        return res
-          .status(400)
-          .json({ message: "Password is required for local registration" });
+      if (hasExistingAccount) {
+        hashedPassword = existingAccount.rows[0].password;
+      } else if (!password) {
+        return res.status(400).json({ message: "Password is required for local registration" });
+      } else {
+        hashedPassword = await bcrypt.hash(password, 10);
       }
-      hashedPassword = await bcrypt.hash(password, 10);
     }
 
     // Generate verification token for local registrations
     let verificationToken = null;
     let tokenExpires = null;
     if (provider === "local") {
-      verificationToken = crypto.randomBytes(32).toString('hex');
-      tokenExpires = new Date(Date.now() + 24 * 60 * 60 * 1000); // 24 hours
+      if (existingAccount.rows.length > 0 && existingAccount.rows[0].email_verified) {
+        // Already verified with another role - skip verification
+      } else {
+        verificationToken = crypto.randomBytes(32).toString('hex');
+        tokenExpires = new Date(Date.now() + 24 * 60 * 60 * 1000); // 24 hours
+      }
     }
 
     // Insert new user
@@ -484,7 +538,7 @@ export const registerResident = async (req, res) => {
         last_name,
         provider,
         provider_id,
-        provider !== "local",
+        provider !== "local" || !verificationToken,
         phone,
         verificationToken,
         tokenExpires
@@ -556,18 +610,42 @@ export const registerResident = async (req, res) => {
       }
     }
 
+    const autoVerified = provider === "local" && !verificationToken;
     res.status(201).json({
-      message: provider === "local"
-        ? emailSent
+      message: provider !== "local" || autoVerified
+        ? "Resident registered successfully."
+        : emailSent
           ? "Resident registered successfully. Please check your email to verify your account."
-          : "Resident registered successfully. Verification email will be sent shortly."
-        : "Resident registered successfully",
+          : "Resident registered successfully. Verification email will be sent shortly.",
       user: userResult.rows[0],
       profile: profileResult.rows[0],
       emailSent,
     });
   } catch (error) {
     console.error("Error registering resident:", error);
+    res.status(500).json({ message: "Server error", error: error.message });
+  }
+};
+
+// 🟢 Check if email already has an account (for multi-role registration)
+export const checkEmailExists = async (req, res) => {
+  const { email } = req.body;
+  if (!email) {
+    return res.status(400).json({ message: "Email is required" });
+  }
+
+  try {
+    const result = await pool.query(
+      "SELECT role FROM users WHERE LOWER(email) = LOWER($1)",
+      [email]
+    );
+    const roles = result.rows.map(r => r.role);
+    res.status(200).json({
+      exists: roles.length > 0,
+      roles,
+    });
+  } catch (error) {
+    console.error("Error checking email:", error);
     res.status(500).json({ message: "Server error", error: error.message });
   }
 };
