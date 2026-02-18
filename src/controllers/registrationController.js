@@ -645,13 +645,17 @@ export const checkEmailExists = async (req, res) => {
 
   try {
     const result = await pool.query(
-      "SELECT role FROM users WHERE LOWER(email) = LOWER($1)",
+      "SELECT role, first_name, last_name, phone FROM users WHERE LOWER(email) = LOWER($1)",
       [email]
     );
     const roles = result.rows.map(r => r.role);
+    const user = result.rows[0] || null;
     res.status(200).json({
       exists: roles.length > 0,
       roles,
+      first_name: user?.first_name || null,
+      last_name: user?.last_name || null,
+      phone: user?.phone || null,
     });
   } catch (error) {
     console.error("Error checking email:", error);
