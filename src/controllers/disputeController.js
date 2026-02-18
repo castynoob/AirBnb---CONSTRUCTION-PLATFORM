@@ -43,9 +43,11 @@ const disputeController = {
       // If job_id is provided, verify user is involved in the job
       if (job_id) {
         const jobCheck = await pool.query(
-          `SELECT id, manager_id, assigned_contractor_id, title
-           FROM jobs
-           WHERE id = $1 AND (manager_id = $2 OR assigned_contractor_id = $2)`,
+          `SELECT j.id, j.title
+           FROM jobs j
+           LEFT JOIN contracts c ON c.job_id = j.id
+           LEFT JOIN bids b ON b.job_id = j.id
+           WHERE j.id = $1 AND (j.manager_id = $2 OR c.entrepreneur_id = $2 OR b.entrepreneur_id = $2)`,
           [job_id, userId]
         );
 

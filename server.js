@@ -9,6 +9,7 @@ dotenv.config();
 // ============================================
 import express from "express";
 import cors from "cors";
+import helmet from "helmet";
 import { createServer } from "http";
 import morgan from "morgan";
 
@@ -57,11 +58,13 @@ import promoCodeRoutes from "./src/routes/promoCodeRoutes.js";
 // SOCKET SETUP
 // ============================================
 import setupSocket from "./src/config/socketSetup.js";
+import { apiRateLimiter } from "./src/middleware/rateLimitMiddleware.js";
 
 // ============================================
 // APP CONFIG
 // ============================================
 const app = express();
+app.use(helmet());
 app.use(morgan("dev"));
 
 // ============================================
@@ -148,6 +151,9 @@ app.use(
   })
 );
 app.use(express.json());
+
+// Global API rate limiter (100 req/min per user, fallback for all routes)
+app.use("/api", apiRateLimiter);
 
 // ============================================
 // ROUTES

@@ -2178,7 +2178,7 @@ export const getAllDisputes = async (limit = 50, offset = 0, filters = {}) => {
       d.reported_id,
       d.type,
       d.reason,
-      d.evidence,
+      d.evidence_urls,
       d.status,
       d.priority,
       d.resolution,

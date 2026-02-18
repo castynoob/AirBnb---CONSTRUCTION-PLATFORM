@@ -101,11 +101,11 @@ export const rateLimit = (options) => {
 /**
  * Login rate limiter
  * Limits login attempts per IP address
- * TEMPORARILY INCREASED FOR TESTING: 100 attempts per 15 minutes
+ * 5 attempts per 15 minutes
  */
 export const loginRateLimiter = rateLimit({
   keyGenerator: (req) => RATE_LIMIT_KEYS.login(req.ip),
-  max: 100, // INCREASED FOR TESTING (was 5)
+  max: 5,
   windowMs: 15 * 60 * 1000, // 15 minutes
   message: 'Too many login attempts from this IP, please try again after 15 minutes',
 });
@@ -113,11 +113,11 @@ export const loginRateLimiter = rateLimit({
 /**
  * Login rate limiter by email
  * Limits login attempts per email address
- * TEMPORARILY INCREASED FOR TESTING: 100 attempts per hour
+ * 10 attempts per hour
  */
 export const loginEmailRateLimiter = rateLimit({
   keyGenerator: (req) => RATE_LIMIT_KEYS.login(req.body.email || 'unknown'),
-  max: 100, // INCREASED FOR TESTING (was 10)
+  max: 10,
   windowMs: 60 * 60 * 1000, // 1 hour
   message: 'Too many login attempts for this email, please try again later',
 });
@@ -129,7 +129,7 @@ export const loginEmailRateLimiter = rateLimit({
  */
 export const registrationRateLimiter = rateLimit({
   keyGenerator: (req) => `ratelimit:register:${req.ip}`,
-  max: 30,
+  max: 3,
   windowMs: 60 * 60 * 1000, // 1 hour
   message: 'Too many registration attempts, please try again later',
 });

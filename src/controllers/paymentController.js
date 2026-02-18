@@ -847,7 +847,7 @@ const PaymentController = {
             }
 
             const paymentIntent = await stripe.paymentIntents.create({
-                amount: 2000,
+                amount: 1999,
                 currency: 'usd',
                 customer: stripe_customer_id,
                 payment_method: payment_method_id,
@@ -869,7 +869,7 @@ const PaymentController = {
                 `INSERT INTO budget_unlocks 
                  (entrepreneur_id, job_id, amount, payment_id, stripe_payment_intent_id, status) 
                  VALUES ($1, $2, $3, $4, $5, $6)`,
-                [entrepreneur_id, job_id, 2000, paymentIntent.id, paymentIntent.id, paymentIntent.status]
+                [entrepreneur_id, job_id, 1999, paymentIntent.id, paymentIntent.id, paymentIntent.status]
             );
 
             console.log(`💰 Budget unlocked for user ${user_id}, job ${job_id}`);
@@ -882,7 +882,7 @@ const PaymentController = {
                 ActivityActions.BUDGET_UNLOCKED,
                 EntityTypes.JOB,
                 job_id,
-                { amount: 2000, job_title: jobQuery.rows[0].title },
+                { amount: 1999, job_title: jobQuery.rows[0].title },
                 ipAddress,
                 userAgent
             );
@@ -928,7 +928,7 @@ const PaymentController = {
             res.json({
                 unlocked: result.rows.length > 0,
                 unlock_date: result.rows[0]?.unlocked_at || null,
-                amount_paid: result.rows[0] ? '$20.00' : null
+                amount_paid: result.rows[0] ? '$19.99' : null
             });
 
         } catch (error) {
@@ -1017,7 +1017,7 @@ const PaymentController = {
             }));
 
             // Format budget unlock paymentss - Budget unlock costs $20 USD
-            const BUDGET_UNLOCK_COST = 20.00;
+            const BUDGET_UNLOCK_COST = 19.99;
             const budgetUnlockPayments = budgetUnlocksQuery.rows.map(unlock => ({
                 id: unlock.id,
                 type: 'budget_unlock',

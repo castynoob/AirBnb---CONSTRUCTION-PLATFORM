@@ -26,6 +26,7 @@ export const registerEntrepreneur = async (req, res) => {
     specializations,
     provider = "local", // default provider
     provider_id = null, // e.g. Google user ID
+    terms_accepted_at,
   } = req.body;
 
   try {
@@ -87,8 +88,8 @@ export const registerEntrepreneur = async (req, res) => {
 
     // Insert new user
     const userResult = await pool.query(
-          `INSERT INTO users (email, password, first_name, last_name, role, provider, provider_id, email_verified, phone, verification_token, verification_token_expires, address, city, province, postal_code, country)
-          VALUES ($1, $2, $3, $4, 'entrepreneur', $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15)
+          `INSERT INTO users (email, password, first_name, last_name, role, provider, provider_id, email_verified, phone, verification_token, verification_token_expires, address, city, province, postal_code, country, terms_accepted, terms_accepted_at)
+          VALUES ($1, $2, $3, $4, 'entrepreneur', $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17)
           RETURNING id, email, role, first_name, last_name, provider, provider_id`,
           [
             email,
@@ -105,7 +106,9 @@ export const registerEntrepreneur = async (req, res) => {
             city || null,
             state || province || null,
             zip_code || postal_code || null,
-            country || null
+            country || null,
+            !!terms_accepted_at,
+            terms_accepted_at || null
         ]
   );
 
@@ -181,6 +184,7 @@ export const registerManager = async (req, res) => {
     country,
     provider = "local",
     provider_id = null,
+    terms_accepted_at,
   } = req.body;
 
   try {
@@ -224,8 +228,8 @@ export const registerManager = async (req, res) => {
     }
 
     const userResult = await pool.query(
-          `INSERT INTO users (email, password, first_name, last_name, role, provider, provider_id, email_verified, phone, verification_token, verification_token_expires, address, city, province, postal_code, country)
-          VALUES ($1, $2, $3, $4, 'property_manager', $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15)
+          `INSERT INTO users (email, password, first_name, last_name, role, provider, provider_id, email_verified, phone, verification_token, verification_token_expires, address, city, province, postal_code, country, terms_accepted, terms_accepted_at)
+          VALUES ($1, $2, $3, $4, 'property_manager', $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17)
           RETURNING id, email, role, first_name, last_name, provider, provider_id`,
           [
             email,
@@ -242,7 +246,9 @@ export const registerManager = async (req, res) => {
             city || null,
             state || province || null,
             zip_code || postal_code || null,
-            country || null
+            country || null,
+            !!terms_accepted_at,
+            terms_accepted_at || null
         ]
     );
 
@@ -464,6 +470,7 @@ export const registerResident = async (req, res) => {
     move_in_date,
     provider = "local",
     provider_id = null,
+    terms_accepted_at,
   } = req.body;
 
   try {
@@ -528,8 +535,8 @@ export const registerResident = async (req, res) => {
 
     // Insert new user
     const userResult = await pool.query(
-      `INSERT INTO users (email, password, first_name, last_name, role, provider, provider_id, email_verified, phone, verification_token, verification_token_expires)
-       VALUES ($1, $2, $3, $4, 'resident', $5, $6, $7, $8, $9, $10)
+      `INSERT INTO users (email, password, first_name, last_name, role, provider, provider_id, email_verified, phone, verification_token, verification_token_expires, terms_accepted, terms_accepted_at)
+       VALUES ($1, $2, $3, $4, 'resident', $5, $6, $7, $8, $9, $10, $11, $12)
        RETURNING id, email, role, first_name, last_name, provider, provider_id`,
       [
         email,
@@ -541,7 +548,9 @@ export const registerResident = async (req, res) => {
         provider !== "local" || !verificationToken,
         phone,
         verificationToken,
-        tokenExpires
+        tokenExpires,
+        !!terms_accepted_at,
+        terms_accepted_at || null
       ]
     );
 
