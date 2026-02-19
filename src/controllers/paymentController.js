@@ -624,6 +624,20 @@ const PaymentController = {
                 const trialEnd = new Date(subscription.trial_end);
                 const daysLeft = Math.ceil((trialEnd - now) / (1000 * 60 * 60 * 24));
                 trialDaysRemaining = Math.max(0, daysLeft);
+
+                // Detect expired trial and update status to past_due
+                if (now >= trialEnd) {
+                    try {
+                        await db.query(
+                            `UPDATE subscriptions SET status = 'past_due', updated_at = NOW() WHERE user_id = $1 AND status = 'trialing'`,
+                            [user_id]
+                        );
+                        subscription.status = 'past_due';
+                        console.log(`⏰ Trial expired for user ${user_id} - updated to past_due`);
+                    } catch (updateErr) {
+                        console.error('Error updating expired trial status:', updateErr);
+                    }
+                }
             }
 
             // Check if this is a free access subscription (promo code or promoter)
@@ -1364,13 +1378,14 @@ const PaymentController = {
 
             console.log(`✅ Payment method updated for user ${user_id}`);
 
-            // If subscription was past_due, try to pay the latest invoice
+            // If subscription was past_due, try to pay the latest invoice and sync status
             if (subscription.status === 'past_due') {
                 try {
                     const stripeSubscription = await stripe.subscriptions.retrieve(
                         subscription.stripe_subscription_id
                     );
 
+                    // Try to pay any open invoice
                     if (stripeSubscription.latest_invoice) {
                         const invoice = await stripe.invoices.retrieve(stripeSubscription.latest_invoice);
 
@@ -1379,8 +1394,19 @@ const PaymentController = {
                             console.log(`✅ Retried payment for past_due subscription ${subscription.stripe_subscription_id}`);
                         }
                     }
+
+                    // Always sync the actual Stripe status back to local DB
+                    // (invoice may have already been paid by Stripe auto-charge)
+                    const currentStatus = stripeSubscription.status;
+                    if (currentStatus !== subscription.status) {
+                        await db.query(
+                            `UPDATE subscriptions SET status = $1, updated_at = NOW() WHERE stripe_subscription_id = $2`,
+                            [currentStatus, subscription.stripe_subscription_id]
+                        );
+                        console.log(`✅ Subscription ${subscription.stripe_subscription_id} synced to ${currentStatus}`);
+                    }
                 } catch (retryError) {
-                    console.error('⚠️ Failed to retry payment:', retryError.message);
+                    console.error('⚠️ Failed to retry/sync payment:', retryError.message);
                     // Don't fail the request - payment method was still updated
                 }
             }
