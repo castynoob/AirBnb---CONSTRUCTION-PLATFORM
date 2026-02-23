@@ -131,6 +131,8 @@ app.use(
 const allowedOrigins = [
   "http://localhost:3000",
   "http://localhost:5173",
+  "https://intervos.app",
+  "https://www.intervos.app",
   process.env.FRONTEND_URL,
 ].filter(Boolean); // Remove undefined values
 
