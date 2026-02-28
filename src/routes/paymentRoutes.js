@@ -106,6 +106,7 @@ router.delete('/queued-promo',
 // ============================================
 
 router.get('/stripe-config', PaymentController.getStripeConfig);
+router.get('/tax-config', PaymentController.getTaxConfig);
 
 // ============================================
 // WEBHOOK ROUTE (NO AUTHENTICATION)

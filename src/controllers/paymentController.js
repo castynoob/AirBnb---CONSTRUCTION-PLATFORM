@@ -37,6 +37,13 @@ const PLANS = {
     }
 };
 
+// Tax configuration
+const TAX_RATE = 0.05; // 5% GST/HST
+const TAX_LABEL = 'GST/HST';
+const BUDGET_UNLOCK_BASE_AMOUNT = 1999; // $19.99 in cents
+const BUDGET_UNLOCK_TAX = Math.round(BUDGET_UNLOCK_BASE_AMOUNT * TAX_RATE); // 100 cents = $1.00
+const BUDGET_UNLOCK_TOTAL = BUDGET_UNLOCK_BASE_AMOUNT + BUDGET_UNLOCK_TAX; // 2099 cents = $20.99
+
 // Log which price IDs are being used
 console.log(`📋 Using Price IDs (${stripeConfig.mode} mode):`, {
     starter: PLANS.starter.price_id,
@@ -392,7 +399,8 @@ const PaymentController = {
             const subscriptionOptions = {
                 customer: customer.id,
                 items: [{
-                    price: plan.price_id
+                    price: plan.price_id,
+                    tax_rates: stripeConfig.taxRateId ? [stripeConfig.taxRateId] : [],
                 }],
                 trial_period_days: 14,
                 default_payment_method: payment_method_id,
@@ -570,7 +578,11 @@ const PaymentController = {
                     current_period_start: period_start_date,
                     current_period_end: subscription.current_period_end,
                     is_trial: subscription.status === 'trialing',
-                    price: `$${PLANS[plan_type].price}/month`
+                    price: `$${PLANS[plan_type].price}/month`,
+                    tax_rate: TAX_RATE,
+                    tax_label: TAX_LABEL,
+                    tax_amount: parseFloat((PLANS[plan_type].price * TAX_RATE).toFixed(2)),
+                    total_with_tax: parseFloat((PLANS[plan_type].price * (1 + TAX_RATE)).toFixed(2))
                 }
             });
 
@@ -861,7 +873,7 @@ const PaymentController = {
             }
 
             const paymentIntent = await stripe.paymentIntents.create({
-                amount: 1999,
+                amount: BUDGET_UNLOCK_TOTAL,
                 currency: 'usd',
                 customer: stripe_customer_id,
                 payment_method: payment_method_id,
@@ -870,20 +882,24 @@ const PaymentController = {
                     enabled: true,
                     allow_redirects: 'never'
                 },
-                description: `Budget unlock for job ${job_id}`,
+                description: `Budget unlock for job ${job_id} (incl. ${TAX_LABEL})`,
                 metadata: {
                     user_id: user_id,
                     entrepreneur_id: entrepreneur_id,
                     job_id: job_id,
-                    job_title: jobQuery.rows[0].title
+                    job_title: jobQuery.rows[0].title,
+                    subtotal: BUDGET_UNLOCK_BASE_AMOUNT,
+                    tax_amount: BUDGET_UNLOCK_TAX,
+                    tax_rate: `${TAX_RATE * 100}%`,
+                    tax_label: TAX_LABEL
                 }
             });
 
             await db.query(
-                `INSERT INTO budget_unlocks 
-                 (entrepreneur_id, job_id, amount, payment_id, stripe_payment_intent_id, status) 
+                `INSERT INTO budget_unlocks
+                 (entrepreneur_id, job_id, amount, payment_id, stripe_payment_intent_id, status)
                  VALUES ($1, $2, $3, $4, $5, $6)`,
-                [entrepreneur_id, job_id, 1999, paymentIntent.id, paymentIntent.id, paymentIntent.status]
+                [entrepreneur_id, job_id, BUDGET_UNLOCK_TOTAL, paymentIntent.id, paymentIntent.id, paymentIntent.status]
             );
 
             console.log(`💰 Budget unlocked for user ${user_id}, job ${job_id}`);
@@ -896,7 +912,7 @@ const PaymentController = {
                 ActivityActions.BUDGET_UNLOCKED,
                 EntityTypes.JOB,
                 job_id,
-                { amount: 1999, job_title: jobQuery.rows[0].title },
+                { amount: BUDGET_UNLOCK_TOTAL, job_title: jobQuery.rows[0].title },
                 ipAddress,
                 userAgent
             );
@@ -905,7 +921,10 @@ const PaymentController = {
                 success: true,
                 message: 'Budget unlocked successfully!',
                 payment_intent_id: paymentIntent.id,
-                amount_paid: '$20.00'
+                subtotal: `$${(BUDGET_UNLOCK_BASE_AMOUNT / 100).toFixed(2)}`,
+                tax_amount: `$${(BUDGET_UNLOCK_TAX / 100).toFixed(2)}`,
+                tax_label: TAX_LABEL,
+                amount_paid: `$${(BUDGET_UNLOCK_TOTAL / 100).toFixed(2)}`
             });
 
         } catch (error) {
@@ -1456,6 +1475,47 @@ const PaymentController = {
             });
         } catch (error) {
             console.error('❌ Get Stripe config error:', error);
+            res.status(500).json({ error: error.message });
+        }
+    },
+
+    /**
+     * GET TAX CONFIG
+     * GET /api/payments/tax-config
+     * Returns tax configuration for frontend display
+     */
+    async getTaxConfig(req, res) {
+        try {
+            res.json({
+                tax_rate: TAX_RATE,
+                tax_percentage: TAX_RATE * 100,
+                tax_label: TAX_LABEL,
+                tax_inclusive: false,
+                budget_unlock: {
+                    subtotal: BUDGET_UNLOCK_BASE_AMOUNT / 100,
+                    tax: BUDGET_UNLOCK_TAX / 100,
+                    total: BUDGET_UNLOCK_TOTAL / 100,
+                },
+                plans: {
+                    starter: {
+                        subtotal: PLANS.starter.price,
+                        tax: parseFloat((PLANS.starter.price * TAX_RATE).toFixed(2)),
+                        total: parseFloat((PLANS.starter.price * (1 + TAX_RATE)).toFixed(2)),
+                    },
+                    basic: {
+                        subtotal: PLANS.basic.price,
+                        tax: parseFloat((PLANS.basic.price * TAX_RATE).toFixed(2)),
+                        total: parseFloat((PLANS.basic.price * (1 + TAX_RATE)).toFixed(2)),
+                    },
+                    premium: {
+                        subtotal: PLANS.premium.price,
+                        tax: parseFloat((PLANS.premium.price * TAX_RATE).toFixed(2)),
+                        total: parseFloat((PLANS.premium.price * (1 + TAX_RATE)).toFixed(2)),
+                    },
+                }
+            });
+        } catch (error) {
+            console.error('Get tax config error:', error);
             res.status(500).json({ error: error.message });
         }
     },

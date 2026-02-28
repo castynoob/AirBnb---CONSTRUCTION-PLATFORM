@@ -30,6 +30,11 @@ const STRIPE_PRICE_ID_PREMIUM = isLiveMode
     ? process.env.STRIPE_PRICE_ID_PREMIUM_LIVE
     : process.env.STRIPE_PRICE_ID_PREMIUM_TEST;
 
+// Tax Rate IDs based on mode
+const STRIPE_TAX_RATE_ID = isLiveMode
+    ? process.env.STRIPE_TAX_RATE_ID_LIVE
+    : process.env.STRIPE_TAX_RATE_ID_TEST;
+
 // Log current mode on startup
 console.log(`💳 Stripe initialized in ${STRIPE_MODE.toUpperCase()} mode`);
 
@@ -46,7 +51,8 @@ export const stripeConfig = {
         starter: STRIPE_PRICE_ID_STARTER,
         basic: STRIPE_PRICE_ID_BASIC,
         premium: STRIPE_PRICE_ID_PREMIUM
-    }
+    },
+    taxRateId: STRIPE_TAX_RATE_ID
 };
 
 export default stripe;
