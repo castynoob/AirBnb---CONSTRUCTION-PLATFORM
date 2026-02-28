@@ -36,11 +36,11 @@ export const submitBid = async (req, res) => {
     // Starter plan: cannot bid on projects over $2,500
     if (req.subscription.plan_type === 'starter') {
       const jobBudgetQuery = await pool.query(
-        `SELECT budget FROM jobs WHERE id = $1`,
+        `SELECT budget_min, budget_max FROM jobs WHERE id = $1`,
         [job_id]
       );
       if (jobBudgetQuery.rows[0]) {
-        const jobBudget = parseFloat(jobBudgetQuery.rows[0].budget);
+        const jobBudget = parseFloat(jobBudgetQuery.rows[0].budget_max || jobBudgetQuery.rows[0].budget_min || 0);
         if (jobBudget > 2500) {
           return res.status(403).json({
             message: "Starter plan cannot bid on projects over $2,500. Upgrade to Basic or Premium to bid on larger projects.",
