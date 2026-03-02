@@ -1,5 +1,5 @@
 // ============================================
-// USER DISPUTE CONTROLLER
+// USER DISPUTE CONTROLLERS
 // Allows users to file and view disputes
 // ============================================
 
