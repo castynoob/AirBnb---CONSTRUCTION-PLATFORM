@@ -142,12 +142,21 @@ app.use(
       // Allow requests with no origin (like mobile apps or curl requests)
       if (!origin) return callback(null, true);
 
+      // Check static allowed origins
       if (allowedOrigins.includes(origin)) {
-        callback(null, true);
-      } else {
-        console.warn(`⚠️ CORS blocked origin: ${origin}`);
-        callback(new Error(`Not allowed by CORS: ${origin}`));
+        return callback(null, true);
       }
+
+      // Allow Vercel preview/deployment URLs for intervos
+      if (
+        origin.endsWith('.vercel.app') &&
+        origin.includes('intervos')
+      ) {
+        return callback(null, true);
+      }
+
+      console.warn(`⚠️ CORS blocked origin: ${origin}`);
+      callback(new Error(`Not allowed by CORS: ${origin}`));
     },
     credentials: true,
   })

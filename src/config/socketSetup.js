@@ -43,6 +43,12 @@ const setupSocket = (server) => {
         if (normalizedAllowed.includes(normalizedOrigin)) {
           console.log(`✅ Socket.IO: Allowing origin: ${origin}`);
           callback(null, true);
+        } else if (
+          normalizedOrigin.endsWith('.vercel.app') &&
+          normalizedOrigin.includes('intervos')
+        ) {
+          console.log(`✅ Socket.IO: Allowing Vercel preview origin: ${origin}`);
+          callback(null, true);
         } else {
           console.error(`❌ Socket.IO CORS blocked: ${origin}`);
           console.error(`   Allowed origins:`, allowedOrigins);
