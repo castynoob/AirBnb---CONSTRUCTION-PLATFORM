@@ -84,4 +84,15 @@ router.post(
   ContractController.approveWork
 );
 
+/**
+ * @route   POST /api/contracts/:id/confirm-completion
+ * @desc    Confirm job completion (either party)
+ * @access  Manager or Entrepreneur involved in contract
+ */
+router.post(
+  '/:id/confirm-completion',
+  authenticateToken,
+  ContractController.confirmCompletion
+);
+
 export default router;

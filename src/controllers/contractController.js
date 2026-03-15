@@ -403,7 +403,12 @@ const ContractController = {
           status: contract.status,
           work_completed_at: contract.work_completed_at,
           approved_at: contract.approved_at,
-          created_at: contract.created_at
+          created_at: contract.created_at,
+          contractor_completion_confirmed: contract.contractor_completion_confirmed,
+          contractor_confirmed_at: contract.contractor_confirmed_at,
+          manager_completion_confirmed: contract.manager_completion_confirmed,
+          manager_confirmed_at: contract.manager_confirmed_at,
+          mutual_confirmation_completed_at: contract.mutual_confirmation_completed_at
         },
         manager: {
           name: `${contract.manager_first_name} ${contract.manager_last_name}`,
@@ -473,7 +478,12 @@ const ContractController = {
           company_name: c.company_name,
           created_at: c.created_at,
           work_completed_at: c.work_completed_at,
-          approved_at: c.approved_at
+          approved_at: c.approved_at,
+          contractor_completion_confirmed: c.contractor_completion_confirmed,
+          contractor_confirmed_at: c.contractor_confirmed_at,
+          manager_completion_confirmed: c.manager_completion_confirmed,
+          manager_confirmed_at: c.manager_confirmed_at,
+          mutual_confirmation_completed_at: c.mutual_confirmation_completed_at
         })),
         total: result.rows.length
       });
@@ -517,13 +527,216 @@ const ContractController = {
           contract_amount: parseFloat(contract.contract_amount),
           work_completed_at: contract.work_completed_at,
           approved_at: contract.approved_at,
-          is_manager: contract.manager_user_id === user_id
+          is_manager: contract.manager_user_id === user_id,
+          contractor_completion_confirmed: contract.contractor_completion_confirmed,
+          contractor_confirmed_at: contract.contractor_confirmed_at,
+          manager_completion_confirmed: contract.manager_completion_confirmed,
+          manager_confirmed_at: contract.manager_confirmed_at,
+          mutual_confirmation_completed_at: contract.mutual_confirmation_completed_at
         }
       });
 
     } catch (error) {
       console.error('❌ Get contract by job error:', error);
       res.status(500).json({ error: error.message });
+    }
+  },
+
+  /**
+   * CONFIRM JOB COMPLETION
+   * Either party confirms the job is fully done
+   * POST /api/contracts/:id/confirm-completion
+   */
+  async confirmCompletion(req, res) {
+    try {
+      const { id } = req.params;
+      const user_id = req.user.id;
+
+      // Get contract with both user IDs and names
+      const contractResult = await pool.query(
+        `SELECT c.*,
+                mp.user_id as manager_user_id,
+                ep.user_id as entrepreneur_user_id,
+                j.title as job_title, j.id as job_id,
+                mu.first_name as manager_first_name, mu.last_name as manager_last_name,
+                eu.first_name as entrepreneur_first_name, eu.last_name as entrepreneur_last_name
+         FROM contracts c
+         JOIN manager_profiles mp ON c.manager_id = mp.id
+         JOIN entrepreneur_profiles ep ON c.entrepreneur_id = ep.id
+         JOIN users mu ON mp.user_id = mu.id
+         JOIN users eu ON ep.user_id = eu.id
+         JOIN jobs j ON c.job_id = j.id
+         WHERE c.id = $1`,
+        [id]
+      );
+
+      if (contractResult.rows.length === 0) {
+        return res.status(404).json({ error: 'Contract not found' });
+      }
+
+      const contract = contractResult.rows[0];
+
+      // Determine role
+      const isManager = contract.manager_user_id === user_id;
+      const isEntrepreneur = contract.entrepreneur_user_id === user_id;
+
+      if (!isManager && !isEntrepreneur) {
+        return res.status(403).json({ error: 'You are not part of this contract' });
+      }
+
+      // Contract must be completed (manager already approved)
+      if (contract.status !== 'completed') {
+        return res.status(400).json({
+          error: 'Contract must be completed before confirming',
+          current_status: contract.status
+        });
+      }
+
+      // Check if already confirmed
+      if (isManager && contract.manager_completion_confirmed) {
+        return res.status(400).json({ error: 'You have already confirmed completion' });
+      }
+      if (isEntrepreneur && contract.contractor_completion_confirmed) {
+        return res.status(400).json({ error: 'You have already confirmed completion' });
+      }
+
+      // Set the appropriate confirmation
+      const confirmColumn = isManager ? 'manager_completion_confirmed' : 'contractor_completion_confirmed';
+      const confirmAtColumn = isManager ? 'manager_confirmed_at' : 'contractor_confirmed_at';
+      const role = isManager ? 'manager' : 'entrepreneur';
+
+      await pool.query(
+        `UPDATE contracts SET ${confirmColumn} = true, ${confirmAtColumn} = NOW(), updated_at = NOW() WHERE id = $1`,
+        [id]
+      );
+
+      // Log event
+      await pool.query(
+        `INSERT INTO contract_events (contract_id, event_type, actor_user_id, actor_role)
+         VALUES ($1, 'completion_confirmed', $2, $3)`,
+        [id, user_id, role]
+      );
+
+      // Re-fetch to check if both confirmed
+      const updatedResult = await pool.query(
+        `SELECT contractor_completion_confirmed, manager_completion_confirmed FROM contracts WHERE id = $1`,
+        [id]
+      );
+      const updated = updatedResult.rows[0];
+      const bothConfirmed = updated.contractor_completion_confirmed && updated.manager_completion_confirmed;
+
+      const io = getIO();
+
+      if (bothConfirmed) {
+        // Set mutual confirmation timestamp
+        await pool.query(
+          `UPDATE contracts SET mutual_confirmation_completed_at = NOW(), updated_at = NOW() WHERE id = $1`,
+          [id]
+        );
+
+        // Log mutual confirmation event
+        await pool.query(
+          `INSERT INTO contract_events (contract_id, event_type, actor_user_id, actor_role, event_data)
+           VALUES ($1, 'mutual_completion_confirmed', $2, $3, $4)`,
+          [id, user_id, role, JSON.stringify({ triggered_by: role })]
+        );
+
+        // Check if reviews already exist
+        const existingReviews = await pool.query(
+          `SELECT reviewer_id FROM reviews WHERE job_id = $1`,
+          [contract.job_id]
+        );
+        const existingReviewerIds = existingReviews.rows.map(r => String(r.reviewer_id));
+
+        // Send review invitation to manager (if hasn't reviewed yet)
+        if (!existingReviewerIds.includes(String(contract.manager_user_id))) {
+          await createNotification({
+            userId: contract.manager_user_id,
+            type: 'review_invitation',
+            jobId: contract.job_id,
+            jobTitle: contract.job_title,
+            content: `Both parties confirmed completion for "${contract.job_title}". Leave a review for ${contract.entrepreneur_first_name} ${contract.entrepreneur_last_name}!`
+          });
+
+          if (io) {
+            io.to(contract.manager_user_id.toString()).emit('review_invitation', {
+              contractId: id,
+              jobId: contract.job_id,
+              jobTitle: contract.job_title,
+              revieweeId: contract.entrepreneur_user_id,
+              revieweeName: `${contract.entrepreneur_first_name} ${contract.entrepreneur_last_name}`,
+              suggestedRating: 5
+            });
+          }
+        }
+
+        // Send review invitation to entrepreneur (if hasn't reviewed yet)
+        if (!existingReviewerIds.includes(String(contract.entrepreneur_user_id))) {
+          await createNotification({
+            userId: contract.entrepreneur_user_id,
+            type: 'review_invitation',
+            jobId: contract.job_id,
+            jobTitle: contract.job_title,
+            content: `Both parties confirmed completion for "${contract.job_title}". Leave a review for ${contract.manager_first_name} ${contract.manager_last_name}!`
+          });
+
+          if (io) {
+            io.to(contract.entrepreneur_user_id.toString()).emit('review_invitation', {
+              contractId: id,
+              jobId: contract.job_id,
+              jobTitle: contract.job_title,
+              revieweeId: contract.manager_user_id,
+              revieweeName: `${contract.manager_first_name} ${contract.manager_last_name}`,
+              suggestedRating: 5
+            });
+          }
+        }
+
+        console.log(`✅ Mutual completion confirmed for contract ${id}`);
+      } else {
+        // Notify the other party
+        const otherUserId = isManager ? contract.entrepreneur_user_id : contract.manager_user_id;
+        const confirmerName = isManager
+          ? `${contract.manager_first_name} ${contract.manager_last_name}`
+          : `${contract.entrepreneur_first_name} ${contract.entrepreneur_last_name}`;
+
+        await createNotification({
+          userId: otherUserId,
+          type: 'completion_confirmed',
+          jobId: contract.job_id,
+          jobTitle: contract.job_title,
+          content: `${confirmerName} confirmed job completion for "${contract.job_title}". Please confirm on your side too.`
+        });
+
+        if (io) {
+          io.to(otherUserId.toString()).emit('completion_confirmed', {
+            contractId: id,
+            jobId: contract.job_id,
+            jobTitle: contract.job_title,
+            confirmedBy: role,
+            confirmerName
+          });
+        }
+
+        console.log(`📋 ${role} confirmed completion for contract ${id}, waiting for other party`);
+      }
+
+      res.json({
+        success: true,
+        message: bothConfirmed
+          ? 'Both parties confirmed! Review invitations sent.'
+          : 'Your confirmation recorded. Waiting for the other party.',
+        both_confirmed: bothConfirmed,
+        contractor_confirmed: updated.contractor_completion_confirmed,
+        manager_confirmed: updated.manager_completion_confirmed
+      });
+
+    } catch (error) {
+      console.error('❌ Confirm completion error:', error);
+      res.status(500).json({
+        error: 'Failed to confirm completion',
+        message: error.message
+      });
     }
   }
 };
