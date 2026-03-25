@@ -10,8 +10,10 @@ import {
   submitBid,
   getBidsForJob,
   getMyBids,
+  getManagerSubmissions,
   approveBid,
   declineBid,
+  cancelBidApproval,
   toggleFavorite,
   updateBid,
   deleteBid
@@ -67,6 +69,15 @@ router.delete(
 );
 
 // Manager endpoints
+// 🚀 Optimized: Get ALL submissions in one query with cursor pagination
+router.get(
+  "/manager/submissions",
+  verifyToken,
+  authorizeRoles("property_manager"),
+  cacheMiddleware((req) => `manager_submissions:${req.user.id}:${req.query.status || 'all'}:${req.query.cursor || 'first'}`, TTL.FIVE_MINUTES),
+  getManagerSubmissions
+);
+
 // Get bids for job - CACHED (5 minutes)
 router.get(
   "/job/:job_id",
@@ -92,6 +103,15 @@ router.patch(
   authorizeRoles("property_manager"),
   invalidateCache(() => [BID_KEYS.allBids()]),
   declineBid
+);
+
+// Cancel bid approval - Manager only
+router.patch(
+  "/:id/cancel-approval",
+  verifyToken,
+  authorizeRoles("property_manager"),
+  invalidateCache(() => [BID_KEYS.allBids()]),
+  cancelBidApproval
 );
 
 // Toggle favorite - Invalidate bid caches

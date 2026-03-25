@@ -10,6 +10,8 @@ import {
   getJobsByManagerId,
   updateJob,
   deleteJob,
+  archiveJob,
+  getArchivedJobs,
   getJobsByEntrepreneurId,
   uploadJobImages,
   getJobImages,
@@ -21,6 +23,9 @@ const router = express.Router();
 
 // Everyone logged in can view jobs - CACHED (5 minutes)
 router.get("/", verifyToken, cacheMiddleware(JOB_KEYS.all, TTL.FIVE_MINUTES), getAllJobs);
+
+// Archived jobs for the current manager
+router.get("/archived", verifyToken, authorizeRoles("property_manager"), getArchivedJobs);
 
 // Single job by ID - CACHED (5 minutes)
 router.get("/:id", verifyToken, cacheMiddleware((req) => JOB_KEYS.single(req.params.id), TTL.FIVE_MINUTES), getJobById);
@@ -54,6 +59,15 @@ router.delete(
   authorizeRoles("property_manager"),
   invalidateCache((req) => [JOB_KEYS.forJob(req.params.id), JOB_KEYS.allJobs()]),
   deleteJob
+);
+
+// Archive/unarchive a job
+router.patch(
+  "/:id/archive",
+  verifyToken,
+  authorizeRoles("property_manager"),
+  invalidateCache((req) => [JOB_KEYS.forJob(req.params.id), JOB_KEYS.allJobs()]),
+  archiveJob
 );
 
 // ========================================

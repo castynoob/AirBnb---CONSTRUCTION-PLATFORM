@@ -116,7 +116,7 @@ export const submitBid = async (req, res) => {
 
       // Get entrepreneur details
       const entrepreneurResult = await pool.query(
-        `SELECT u.id as user_id, u.first_name, u.last_name, ep.license_number
+        `SELECT u.id as user_id, u.first_name, u.last_name, ep.license_number, ep.company_name
          FROM entrepreneur_profiles ep
          JOIN users u ON ep.user_id = u.id
          WHERE ep.id = $1`,
@@ -144,9 +144,10 @@ export const submitBid = async (req, res) => {
             console.log(`      - Socket ${socketId}: userId=${socket.userId}, rooms=[${Array.from(socket.rooms).join(', ')}]`);
           });
 
+          const displayName = entrepreneur.company_name || `${entrepreneur.first_name} ${entrepreneur.last_name}`;
           io.to(managerRoom).emit('new_bid', {
             bidId: newBid.id,
-            bidderName: `${entrepreneur.first_name} ${entrepreneur.last_name}`,
+            bidderName: displayName,
             bidderId: entrepreneur_id,
             jobId: job_id,
             jobTitle: job.title,
@@ -162,7 +163,7 @@ export const submitBid = async (req, res) => {
               userId: job.manager_user_id,
               type: 'bid',
               bidderId: entrepreneur.user_id, // Use user_id, not entrepreneur_profile_id
-              bidderName: `${entrepreneur.first_name} ${entrepreneur.last_name}`,
+              bidderName: displayName,
               jobId: job_id,
               jobTitle: job.title,
               propertyName: job.building_name || '',
@@ -207,6 +208,218 @@ export const submitBid = async (req, res) => {
   } catch (err) {
     console.error("❌ Error submitting bid:", err);
     console.log('========================================\n');
+    res.status(500).json({ message: "Server error" });
+  }
+};
+
+// ============================================
+// 🚀 OPTIMIZED: Get ALL submissions for manager in ONE query
+// Replaces the N+1 fetching pattern (jobs → bids → properties → reviews → contracts)
+// ============================================
+export const getManagerSubmissions = async (req, res) => {
+  try {
+    const { cursor, limit: rawLimit, status } = req.query;
+    const limit = Math.min(parseInt(rawLimit) || 50, 100);
+
+    // Get manager profile
+    const managerResult = await pool.query(
+      `SELECT id FROM manager_profiles WHERE user_id = $1`,
+      [req.user.id]
+    );
+    if (!managerResult.rows[0]) {
+      return res.status(403).json({ message: "Manager profile not found" });
+    }
+    const managerId = managerResult.rows[0].id;
+
+    // Build WHERE clause for optional status filter
+    const conditions = [`j.manager_id = $1`, `b.status != 'declined'`, `(j.is_archived = false OR j.is_archived IS NULL)`];
+    const params = [managerId];
+    let paramIndex = 2;
+
+    if (status && status !== 'all') {
+      conditions.push(`b.status = $${paramIndex}`);
+      params.push(status);
+      paramIndex++;
+    }
+
+    // Cursor-based pagination (by bid created_at)
+    if (cursor) {
+      conditions.push(`b.created_at < $${paramIndex}`);
+      params.push(new Date(cursor));
+      paramIndex++;
+    }
+
+    // Single query: jobs + bids + entrepreneur profiles + properties + reviews + contracts
+    const query = `
+      SELECT
+        -- Bid data
+        b.id AS bid_id, b.job_id AS bid_job_id, b.entrepreneur_id, b.amount AS bid_amount,
+        b.message AS bid_message, b.status AS bid_status,
+        b.created_at AS bid_created_at, b.updated_at AS bid_updated_at,
+
+        -- Job data
+        j.id AS job_id, j.title AS job_title, j.description AS job_description,
+        j.category, j.urgency, j.budget_min, j.budget_max,
+        j.is_budget_hidden, j.is_emergency, j.status AS job_status,
+        j.due_date, j.estimated_duration_days, j.property_id,
+        j.manager_id, j.unit_id,
+        j.created_at AS job_created_at, j.updated_at AS job_updated_at,
+
+        -- Entrepreneur profile
+        ep.user_id AS entrepreneur_user_id,
+        ep.company_name, ep.license_number, ep.years_in_business,
+        ep.specializations, ep.average_rating, ep.total_reviews,
+
+        -- Entrepreneur user info
+        u.first_name, u.last_name, u.email,
+
+        -- Property info
+        p.building_name AS property_building_name,
+        p.address AS property_address,
+        p.city AS property_city,
+        p.province AS property_province,
+
+        -- Review (latest for the job, if completed)
+        r.id AS review_id, r.rating AS review_rating,
+        r.comment AS review_comment, r.review_created_at,
+
+        -- Contract (for the job, if exists)
+        c.id AS contract_id, c.status AS contract_status,
+        c.contract_amount, c.contract_created_at,
+        c.manager_completion_confirmed, c.contractor_completion_confirmed,
+        c.mutual_confirmation_completed_at
+
+      FROM bids b
+      JOIN jobs j ON b.job_id = j.id
+      JOIN entrepreneur_profiles ep ON b.entrepreneur_id = ep.id
+      JOIN users u ON ep.user_id = u.id
+      LEFT JOIN properties p ON j.property_id = p.id
+      LEFT JOIN LATERAL (
+        SELECT id, rating, comment, created_at AS review_created_at
+        FROM reviews
+        WHERE job_id = j.id
+        ORDER BY created_at DESC
+        LIMIT 1
+      ) r ON true
+      LEFT JOIN LATERAL (
+        SELECT id, status, contract_amount, created_at AS contract_created_at,
+               manager_completion_confirmed, contractor_completion_confirmed,
+               mutual_confirmation_completed_at
+        FROM contracts
+        WHERE job_id = j.id
+        ORDER BY created_at DESC
+        LIMIT 1
+      ) c ON true
+      WHERE ${conditions.join(' AND ')}
+      ORDER BY b.created_at DESC
+      LIMIT $${paramIndex}
+    `;
+    params.push(limit + 1); // fetch one extra to check if there's a next page
+
+    const result = await pool.query(query, params);
+    const rows = result.rows;
+
+    // Check if there's more data
+    const hasMore = rows.length > limit;
+    const data = hasMore ? rows.slice(0, limit) : rows;
+
+    // Get next cursor
+    const nextCursor = hasMore ? data[data.length - 1].bid_created_at.toISOString() : null;
+
+    // Transform rows into the shape the frontend expects
+    const submissions = data.map(row => ({
+      bid: {
+        id: row.bid_id,
+        job_id: row.bid_job_id,
+        entrepreneur_id: row.entrepreneur_id,
+        amount: row.bid_amount,
+        message: row.bid_message,
+        status: row.bid_status,
+        created_at: row.bid_created_at,
+        updated_at: row.bid_updated_at,
+      },
+      job: {
+        id: row.job_id,
+        title: row.job_title,
+        description: row.job_description,
+        category: row.category,
+        urgency: row.urgency,
+        budget_min: row.budget_min,
+        budget_max: row.budget_max,
+        is_budget_hidden: row.is_budget_hidden,
+        is_emergency: row.is_emergency,
+        status: row.job_status,
+        due_date: row.due_date,
+        estimated_duration_days: row.estimated_duration_days,
+        property_id: row.property_id,
+        manager_id: row.manager_id,
+        unit_id: row.unit_id,
+        created_at: row.job_created_at,
+        updated_at: row.job_updated_at,
+      },
+      entrepreneur_profile: {
+        id: row.entrepreneur_id,
+        user_id: row.entrepreneur_user_id,
+        entrepreneur_user_id: row.entrepreneur_user_id,
+        company_name: row.company_name,
+        license_number: row.license_number,
+        years_in_business: row.years_in_business,
+        specializations: row.specializations || [],
+        average_rating: row.average_rating,
+        total_reviews: row.total_reviews,
+      },
+      user: {
+        first_name: row.first_name,
+        last_name: row.last_name,
+        email: row.email,
+      },
+      property_name: row.property_building_name || row.property_address || 'Unknown Property',
+      property_address: row.property_address
+        ? `${row.property_address}, ${row.property_city || ''}, ${row.property_province || ''}`.replace(/, ,/g, ',').replace(/,$/, '')
+        : 'Unknown Location',
+      review: row.review_id ? {
+        id: row.review_id,
+        rating: row.review_rating,
+        comment: row.review_comment,
+        created_at: row.review_created_at,
+      } : null,
+      contract: row.contract_id ? {
+        id: row.contract_id,
+        status: row.contract_status,
+        contract_amount: row.contract_amount,
+        created_at: row.contract_created_at,
+        manager_completion_confirmed: row.manager_completion_confirmed,
+        contractor_completion_confirmed: row.contractor_completion_confirmed,
+        mutual_confirmation_completed_at: row.mutual_confirmation_completed_at,
+      } : null,
+    }));
+
+    // Also return status counts in one query
+    const countsResult = await pool.query(
+      `SELECT
+        COUNT(*) FILTER (WHERE b.status != 'declined') AS total,
+        COUNT(*) FILTER (WHERE b.status = 'pending') AS open,
+        COUNT(*) FILTER (WHERE b.status = 'approved') AS approved,
+        COUNT(*) FILTER (WHERE j.status = 'ongoing' AND b.status = 'approved') AS ongoing,
+        COUNT(*) FILTER (WHERE j.status = 'completed' AND b.status = 'approved') AS completed,
+        COUNT(*) FILTER (WHERE j.is_archived = true AND b.status != 'declined') AS archived
+      FROM bids b
+      JOIN jobs j ON b.job_id = j.id
+      WHERE j.manager_id = $1`,
+      [managerId]
+    );
+
+    res.json({
+      submissions,
+      pagination: {
+        limit,
+        hasMore,
+        nextCursor,
+      },
+      counts: countsResult.rows[0] || {},
+    });
+  } catch (err) {
+    console.error("❌ Error in getManagerSubmissions:", err);
     res.status(500).json({ message: "Server error" });
   }
 };
@@ -673,7 +886,10 @@ export const deleteBid = async (req, res) => {
 
     // Get entrepreneur profile
     const entrepreneurProfile = await pool.query(
-      `SELECT id FROM entrepreneur_profiles WHERE user_id = $1`,
+      `SELECT ep.id, ep.company_name, u.first_name, u.last_name
+       FROM entrepreneur_profiles ep
+       JOIN users u ON ep.user_id = u.id
+       WHERE ep.user_id = $1`,
       [req.user.id]
     );
 
@@ -681,17 +897,60 @@ export const deleteBid = async (req, res) => {
       return res.status(403).json({ message: "Entrepreneur profile not found" });
     }
 
+    const entrepreneur = entrepreneurProfile.rows[0];
+
     // Check if this bid belongs to the entrepreneur
-    if (bid.entrepreneur_id !== entrepreneurProfile.rows[0].id) {
+    if (bid.entrepreneur_id !== entrepreneur.id) {
       return res.status(403).json({
         message: "You can only delete your own bids"
       });
     }
 
+    // Get job + manager info for notification
+    const jobResult = await pool.query(
+      `SELECT j.title, j.manager_id, mp.user_id AS manager_user_id
+       FROM jobs j
+       JOIN manager_profiles mp ON j.manager_id = mp.id
+       WHERE j.id = $1`,
+      [bid.job_id]
+    );
+
     // Delete the bid
     const deletedBid = await Bid.deleteBid(id);
 
-    // Log user activity - entrepreneur withdrawing bid
+    // Notify property manager
+    if (jobResult.rows[0]) {
+      const job = jobResult.rows[0];
+      const entrepreneurName = entrepreneur.company_name || `${entrepreneur.first_name} ${entrepreneur.last_name}`;
+
+      // Socket notification
+      const io = getIO();
+      if (io) {
+        io.to(job.manager_user_id.toString()).emit('bid_withdrawn', {
+          bidId: id,
+          jobId: bid.job_id,
+          jobTitle: job.title,
+          entrepreneurName,
+          amount: bid.amount,
+        });
+      }
+
+      // Persist notification to database
+      try {
+        await createNotification({
+          userId: job.manager_user_id,
+          type: 'bid_withdrawn',
+          senderId: req.user.id,
+          senderName: entrepreneurName,
+          content: `${entrepreneurName} withdrew their bid of $${Number(bid.amount).toLocaleString()} on "${job.title}"`,
+          jobId: bid.job_id,
+        });
+      } catch (notifErr) {
+        console.error('Failed to save bid withdrawal notification:', notifErr);
+      }
+    }
+
+    // Log user activity
     const ipAddress = req.ip || req.headers['x-forwarded-for'] || req.connection?.remoteAddress;
     const userAgent = req.headers['user-agent'];
     await createUserActivityLog(
@@ -705,7 +964,7 @@ export const deleteBid = async (req, res) => {
     );
 
     res.json({
-      message: "Bid deleted successfully",
+      message: "Bid withdrawn successfully",
       bid: deletedBid
     });
 
@@ -765,6 +1024,170 @@ export const toggleFavorite = async (req, res) => {
 
   } catch (err) {
     console.error("❌ Error toggling favorite:", err);
+    res.status(500).json({ message: "Server error" });
+  }
+};
+
+// 🔄 Cancel bid approval (Manager only)
+export const cancelBidApproval = async (req, res) => {
+  try {
+    const { id } = req.params;
+
+    // Get the bid
+    const bid = await Bid.getBidById(id);
+    if (!bid) {
+      return res.status(404).json({ message: "Bid not found" });
+    }
+
+    if (bid.status !== 'approved') {
+      return res.status(400).json({ message: "Only approved bids can be cancelled" });
+    }
+
+    // Verify manager owns the job
+    const managerProfile = await pool.query(
+      `SELECT id FROM manager_profiles WHERE user_id = $1`,
+      [req.user.id]
+    );
+    if (!managerProfile.rows[0]) {
+      return res.status(403).json({ message: "Manager profile not found" });
+    }
+
+    const job = await pool.query(
+      `SELECT j.*, p.building_name FROM jobs j
+       LEFT JOIN properties p ON j.property_id = p.id
+       WHERE j.id = $1 AND j.manager_id = $2`,
+      [bid.job_id, managerProfile.rows[0].id]
+    );
+    if (!job.rows[0]) {
+      return res.status(403).json({ message: "You can only cancel bids for your own jobs" });
+    }
+
+    const jobData = job.rows[0];
+
+    // Status guard: only allow cancel when job is 'accepted' (not ongoing/completed)
+    if (jobData.status === 'ongoing' || jobData.status === 'completed') {
+      return res.status(400).json({
+        message: `Cannot cancel acceptance for a job that is ${jobData.status}.`
+      });
+    }
+
+    // Get the entrepreneur's user info for notifications
+    const entrepreneur = await pool.query(
+      `SELECT ep.id as profile_id, u.id as user_id, u.first_name, u.last_name
+       FROM entrepreneur_profiles ep
+       JOIN users u ON ep.user_id = u.id
+       WHERE ep.id = $1`,
+      [bid.entrepreneur_id]
+    );
+    const entrepreneurData = entrepreneur.rows[0];
+
+    // 1. Revert bid status to pending
+    await Bid.updateBidStatus(id, 'pending');
+
+    // 2. Restore auto-declined bids back to pending
+    const restoredBids = await Bid.restoreDeclinedBids(bid.job_id, id);
+    console.log(`🔄 Restored ${restoredBids.length} declined bid(s) for job ${bid.job_id}`);
+
+    // 3. Cancel active contract if exists
+    const contractResult = await pool.query(
+      `UPDATE contracts SET status = 'cancelled', updated_at = NOW()
+       WHERE job_id = $1 AND status IN ('active', 'work_completed')
+       RETURNING id`,
+      [bid.job_id]
+    );
+    if (contractResult.rows.length > 0) {
+      await pool.query(
+        `INSERT INTO contract_events (contract_id, event_type, actor_user_id, actor_role, event_data)
+         VALUES ($1, 'contract_cancelled', $2, 'manager', $3)`,
+        [contractResult.rows[0].id, req.user.id, JSON.stringify({ reason: 'bid_approval_cancelled', job_title: jobData.title })]
+      );
+    }
+
+    // 4. Revert job to Open
+    await pool.query(
+      `UPDATE jobs SET status = 'Open', has_contract = false, contract_status = null, entrepreneur_id = null, updated_at = NOW()
+       WHERE id = $1`,
+      [bid.job_id]
+    );
+
+    // 5. Notify the contractor whose bid was cancelled
+    const io = getIO();
+    if (entrepreneurData) {
+      const cancelContent = `Your approved bid for "${jobData.title}" has been cancelled by the property manager. The job is now open for bidding again.`;
+
+      await createNotification({
+        userId: entrepreneurData.user_id,
+        type: 'bid_approval_cancelled',
+        jobId: bid.job_id,
+        jobTitle: jobData.title,
+        content: cancelContent,
+        bidderId: entrepreneurData.user_id,
+        bidAmount: bid.amount
+      });
+
+      if (io) {
+        io.to(entrepreneurData.user_id.toString()).emit('bid_approval_cancelled', {
+          bidId: id,
+          jobId: bid.job_id,
+          jobTitle: jobData.title,
+          propertyName: jobData.building_name || '',
+          bidAmount: bid.amount,
+          message: cancelContent
+        });
+      }
+    }
+
+    // 6. Notify restored bidders that the job is open again
+    for (const restoredBid of restoredBids) {
+      const restoredEntrepreneur = await pool.query(
+        `SELECT u.id as user_id FROM entrepreneur_profiles ep
+         JOIN users u ON ep.user_id = u.id
+         WHERE ep.id = $1`,
+        [restoredBid.entrepreneur_id]
+      );
+
+      if (restoredEntrepreneur.rows[0]) {
+        const reopenContent = `The job "${jobData.title}" is open for bidding again. Your bid has been restored.`;
+
+        await createNotification({
+          userId: restoredEntrepreneur.rows[0].user_id,
+          type: 'job_reopened',
+          jobId: bid.job_id,
+          jobTitle: jobData.title,
+          content: reopenContent
+        });
+
+        if (io) {
+          io.to(restoredEntrepreneur.rows[0].user_id.toString()).emit('job_reopened', {
+            jobId: bid.job_id,
+            jobTitle: jobData.title,
+            bidId: restoredBid.id,
+            message: reopenContent
+          });
+        }
+      }
+    }
+
+    // Log activity
+    const ipAddress = req.ip || req.headers['x-forwarded-for'] || req.connection?.remoteAddress;
+    const userAgent = req.headers['user-agent'];
+    await createUserActivityLog(
+      req.user.id,
+      'bid_acceptance_cancelled',
+      EntityTypes.BID,
+      id,
+      { job_id: bid.job_id, job_title: jobData.title, entrepreneur_name: entrepreneurData ? `${entrepreneurData.first_name} ${entrepreneurData.last_name}` : 'Unknown', bids_restored: restoredBids.length },
+      ipAddress,
+      userAgent
+    );
+
+    res.json({
+      message: "Bid approval cancelled successfully. Job is now open for bidding.",
+      bids_restored: restoredBids.length
+    });
+
+  } catch (err) {
+    console.error("❌ Error cancelling bid approval:", err);
     res.status(500).json({ message: "Server error" });
   }
 };

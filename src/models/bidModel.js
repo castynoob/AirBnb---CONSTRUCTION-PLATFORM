@@ -131,6 +131,20 @@ export const declineOtherBids = async (job_id, approved_bid_id) => {
   return result.rows;
 };
 
+// 🔄 Restore declined bids back to pending (when bid approval is cancelled)
+export const restoreDeclinedBids = async (job_id, excluded_bid_id) => {
+  const result = await pool.query(
+    `UPDATE bids
+     SET status = 'pending', updated_at = NOW()
+     WHERE job_id = $1
+     AND id != $2
+     AND status = 'declined'
+     RETURNING *`,
+    [job_id, excluded_bid_id]
+  );
+  return result.rows;
+};
+
 // 🔴 Decline all bids for a job (when job is force-closed by admin)
 export const declineAllBidsForJob = async (job_id) => {
   const result = await pool.query(

@@ -12,7 +12,8 @@ import {
   deleteProperty,
   getAllProperties,
   uploadPropertyImage,
-  deletePropertyImage
+  deletePropertyImage,
+  getPropertyMaintenanceLog
 } from "../controllers/propertyController.js";
 import { uploadImage, handleUploadError } from "../middleware/uploadMiddleware.js";
 
@@ -30,6 +31,14 @@ router.get(
   authorizeRoles("property_manager"),
   cacheMiddleware((req) => PROPERTY_KEYS.byManager(req.user.id || req.user.userId), TTL.TEN_MINUTES),
   getMyProperties
+);
+
+// Maintenance log for a property
+router.get(
+  "/:id/maintenance-log",
+  verifyToken,
+  authorizeRoles("property_manager"),
+  getPropertyMaintenanceLog
 );
 
 // Property by ID with stats - CACHED (10 minutes)

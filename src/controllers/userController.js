@@ -587,7 +587,12 @@ export const updateEntrepreneurProfile = async (req, res) => {
       years_in_business,
       num_employees,
       address,
-      specializations
+      specializations,
+      rbq_license_number,
+      service_area,
+      insurance_provider,
+      insurance_expiry,
+      portfolio
     } = req.body;
 
     // Validate required fields
@@ -619,8 +624,13 @@ export const updateEntrepreneurProfile = async (req, res) => {
            num_employees = $4,
            address = $5,
            specializations = $6,
+           rbq_license_number = $7,
+           service_area = $8,
+           insurance_provider = $9,
+           insurance_expiry = $10,
+           portfolio = $11,
            updated_at = NOW()
-       WHERE user_id = $7
+       WHERE user_id = $12
        RETURNING *`,
       [
         company_name,
@@ -629,6 +639,11 @@ export const updateEntrepreneurProfile = async (req, res) => {
         num_employees,
         address,
         specializations || [],
+        rbq_license_number || null,
+        service_area || null,
+        insurance_provider || null,
+        insurance_expiry || null,
+        portfolio ? JSON.stringify(portfolio) : null,
         userId
       ]
     );
@@ -642,6 +657,240 @@ export const updateEntrepreneurProfile = async (req, res) => {
 
   } catch (error) {
     console.error('[Update] Entrepreneur profile error:', error);
+    res.status(500).json({
+      message: 'Server error',
+      error: error.message
+    });
+  }
+};
+
+/**
+ * Upload Insurance Proof
+ * POST /api/users/entrepreneur-profile/insurance-proof
+ *
+ * Uploads insurance document and updates insurance_proof_url
+ */
+export const uploadInsuranceProof = async (req, res) => {
+  try {
+    const userId = req.user.id;
+
+    if (!req.file) {
+      return res.status(400).json({
+        error: 'No file uploaded',
+        message: 'Please provide an insurance document',
+      });
+    }
+
+    // Check if entrepreneur profile exists
+    const entrepreneurCheck = await pool.query(
+      'SELECT id, insurance_proof_url FROM entrepreneur_profiles WHERE user_id = $1',
+      [userId]
+    );
+
+    if (entrepreneurCheck.rows.length === 0) {
+      return res.status(404).json({
+        message: 'Entrepreneur profile not found'
+      });
+    }
+
+    const profile = entrepreneurCheck.rows[0];
+    const oldProofUrl = profile.insurance_proof_url;
+
+    // Generate unique filename and upload
+    const uniqueFileName = generateUniqueFileName(req.file.originalname);
+    const filePath = `${userId}/insurance/${uniqueFileName}`;
+
+    const uploadResult = await uploadToSupabase({
+      fileBuffer: req.file.buffer,
+      bucket: BUCKETS.DOCUMENTS,
+      filePath: filePath,
+      contentType: req.file.mimetype,
+      upsert: false,
+    });
+
+    if (!uploadResult.success) {
+      return res.status(500).json({
+        error: 'Upload failed',
+        message: uploadResult.error,
+      });
+    }
+
+    const fileUrl = getPublicUrl(BUCKETS.DOCUMENTS, uploadResult.data.path);
+
+    // Update insurance_proof_url in DB
+    await pool.query(
+      'UPDATE entrepreneur_profiles SET insurance_proof_url = $1, updated_at = NOW() WHERE user_id = $2',
+      [fileUrl, userId]
+    );
+
+    // Delete old proof file if exists
+    if (oldProofUrl) {
+      const oldFilePath = extractFilePathFromUrl(oldProofUrl, BUCKETS.DOCUMENTS);
+      if (oldFilePath) {
+        await deleteFromSupabase(BUCKETS.DOCUMENTS, oldFilePath);
+      }
+    }
+
+    console.log(`[Upload] ✓ Insurance proof uploaded: ${userId}`);
+
+    res.status(200).json({
+      message: 'Insurance proof uploaded successfully',
+      fileUrl: fileUrl,
+    });
+
+  } catch (error) {
+    console.error('[Upload] Insurance proof error:', error);
+    res.status(500).json({
+      message: 'Server error',
+      error: error.message
+    });
+  }
+};
+
+/**
+ * Add Portfolio Photo
+ * POST /api/users/entrepreneur-profile/portfolio
+ *
+ * Uploads a photo and appends it to the portfolio jsonb array
+ */
+export const addPortfolioPhoto = async (req, res) => {
+  try {
+    const userId = req.user.id;
+
+    if (!req.file) {
+      return res.status(400).json({
+        error: 'No file uploaded',
+        message: 'Please provide a photo',
+      });
+    }
+
+    // Check if entrepreneur profile exists
+    const entrepreneurCheck = await pool.query(
+      'SELECT id, portfolio FROM entrepreneur_profiles WHERE user_id = $1',
+      [userId]
+    );
+
+    if (entrepreneurCheck.rows.length === 0) {
+      return res.status(404).json({
+        message: 'Entrepreneur profile not found'
+      });
+    }
+
+    const profile = entrepreneurCheck.rows[0];
+    const currentPortfolio = profile.portfolio || [];
+
+    // Upload photo
+    const uniqueFileName = generateUniqueFileName(req.file.originalname);
+    const filePath = `${userId}/portfolio/${uniqueFileName}`;
+
+    const uploadResult = await uploadToSupabase({
+      fileBuffer: req.file.buffer,
+      bucket: BUCKETS.PROFILE_IMAGES,
+      filePath: filePath,
+      contentType: req.file.mimetype,
+      upsert: false,
+    });
+
+    if (!uploadResult.success) {
+      return res.status(500).json({
+        error: 'Upload failed',
+        message: uploadResult.error,
+      });
+    }
+
+    const fileUrl = getPublicUrl(BUCKETS.PROFILE_IMAGES, uploadResult.data.path);
+
+    // Append new entry to portfolio
+    const newEntry = {
+      url: fileUrl,
+      caption: req.body.caption || '',
+      uploaded_at: new Date().toISOString()
+    };
+    const updatedPortfolio = [...currentPortfolio, newEntry];
+
+    // Update portfolio in DB
+    const updateResult = await pool.query(
+      'UPDATE entrepreneur_profiles SET portfolio = $1, updated_at = NOW() WHERE user_id = $2 RETURNING portfolio',
+      [JSON.stringify(updatedPortfolio), userId]
+    );
+
+    console.log(`[Upload] ✓ Portfolio photo added: ${userId}`);
+
+    res.status(200).json({
+      message: 'Portfolio photo added successfully',
+      portfolio: updateResult.rows[0].portfolio,
+    });
+
+  } catch (error) {
+    console.error('[Upload] Portfolio photo error:', error);
+    res.status(500).json({
+      message: 'Server error',
+      error: error.message
+    });
+  }
+};
+
+/**
+ * Remove Portfolio Photo
+ * DELETE /api/users/entrepreneur-profile/portfolio/:photoIndex
+ *
+ * Removes a photo from the portfolio by index and deletes the file from storage
+ */
+export const removePortfolioPhoto = async (req, res) => {
+  try {
+    const userId = req.user.id;
+    const photoIndex = parseInt(req.params.photoIndex, 10);
+
+    // Check if entrepreneur profile exists
+    const entrepreneurCheck = await pool.query(
+      'SELECT id, portfolio FROM entrepreneur_profiles WHERE user_id = $1',
+      [userId]
+    );
+
+    if (entrepreneurCheck.rows.length === 0) {
+      return res.status(404).json({
+        message: 'Entrepreneur profile not found'
+      });
+    }
+
+    const profile = entrepreneurCheck.rows[0];
+    const currentPortfolio = profile.portfolio || [];
+
+    if (isNaN(photoIndex) || photoIndex < 0 || photoIndex >= currentPortfolio.length) {
+      return res.status(400).json({
+        message: 'Invalid photo index'
+      });
+    }
+
+    // Get the photo entry to delete
+    const photoToRemove = currentPortfolio[photoIndex];
+
+    // Delete file from Supabase
+    if (photoToRemove.url) {
+      const filePath = extractFilePathFromUrl(photoToRemove.url, BUCKETS.PROFILE_IMAGES);
+      if (filePath) {
+        await deleteFromSupabase(BUCKETS.PROFILE_IMAGES, filePath);
+      }
+    }
+
+    // Remove entry from array
+    const updatedPortfolio = currentPortfolio.filter((_, i) => i !== photoIndex);
+
+    // Update portfolio in DB
+    const updateResult = await pool.query(
+      'UPDATE entrepreneur_profiles SET portfolio = $1, updated_at = NOW() WHERE user_id = $2 RETURNING portfolio',
+      [JSON.stringify(updatedPortfolio), userId]
+    );
+
+    console.log(`[Delete] ✓ Portfolio photo removed: ${userId}, index: ${photoIndex}`);
+
+    res.status(200).json({
+      message: 'Portfolio photo removed successfully',
+      portfolio: updateResult.rows[0].portfolio,
+    });
+
+  } catch (error) {
+    console.error('[Delete] Portfolio photo error:', error);
     res.status(500).json({
       message: 'Server error',
       error: error.message
@@ -796,5 +1045,36 @@ export const getSupplierProfileById = async (req, res) => {
   } catch (error) {
     console.error("Error fetching supplier by id:", error);
     res.status(500).json({ message: "Server error" });
+  }
+};
+
+// ============================================
+// EMAIL NOTIFICATION PREFERENCE
+// ============================================
+export const getEmailNotificationPreference = async (req, res) => {
+  try {
+    const result = await pool.query(
+      'SELECT email_notifications FROM users WHERE id = $1',
+      [req.user.id]
+    );
+    if (!result.rows[0]) return res.status(404).json({ success: false, message: 'User not found' });
+    res.json({ success: true, email_notifications: result.rows[0].email_notifications !== false });
+  } catch (error) {
+    console.error('Get email notification preference error:', error);
+    res.status(500).json({ success: false, message: 'Server error' });
+  }
+};
+
+export const updateEmailNotificationPreference = async (req, res) => {
+  try {
+    const { email_notifications } = req.body;
+    await pool.query(
+      'UPDATE users SET email_notifications = $1 WHERE id = $2',
+      [email_notifications, req.user.id]
+    );
+    res.json({ success: true, email_notifications });
+  } catch (error) {
+    console.error('Update email notification preference error:', error);
+    res.status(500).json({ success: false, message: 'Server error' });
   }
 };

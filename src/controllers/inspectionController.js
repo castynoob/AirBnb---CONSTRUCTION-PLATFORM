@@ -1,10 +1,10 @@
 import InspectionModel from '../models/inspectionModel.js';
 import { uploadToSupabase, deleteFromSupabase, getPublicUrl, downloadFromSupabase } from '../utils/supabaseHelpers.js';
-import { parseInspectionExcel, parseMaintenanceExcel, generateInspectionTemplate, validateExcelStructure } from '../utils/excelParser.js';
+import { generateInspectionTemplate } from '../utils/excelParser.js';
+import { parseExcelWithAI } from '../utils/aiExcelParser.js';
 import { BUCKETS } from '../config/supabase.js';
 import { v4 as uuidv4 } from 'uuid';
 import * as cache from '../config/cache.js';
-import * as XLSX from 'xlsx';
 
 /**
  * Inspection Controller
@@ -43,132 +43,131 @@ const InspectionController = {
         });
       }
 
-      // Validate Excel structure first
-      const validation = validateExcelStructure(req.file.buffer);
-      if (!validation.valid) {
-        return res.status(400).json({
-          error: 'Invalid Excel format',
-          message: validation.error,
-          suggestion: validation.suggestion,
-          detectedColumns: validation.detectedColumns,
-        });
-      }
+      // Set SSE headers for streaming progress
+      res.setHeader('Content-Type', 'text/event-stream');
+      res.setHeader('Cache-Control', 'no-cache');
+      res.setHeader('Connection', 'keep-alive');
+      res.setHeader('X-Accel-Buffering', 'no');
+      res.flushHeaders();
 
-      // Parse Excel file - Auto-detect template type
-      console.log(`[Inspection] Parsing Excel for property ${property_id}...`);
+      const sendEvent = (data) => {
+        res.write(`data: ${JSON.stringify(data)}\n\n`);
+      };
 
-      // Detect template type by checking columns
-      const workbook = XLSX.read(req.file.buffer, { type: 'buffer' });
-      const sheetName = workbook.SheetNames[0];
-      const worksheet = workbook.Sheets[sheetName];
-      const rawData = XLSX.utils.sheet_to_json(worksheet);
-      const headers = rawData.length > 0 ? Object.keys(rawData[0]) : [];
-      const headerStr = headers.join('|').toLowerCase();
+      sendEvent({ stage: 'uploading', message: 'Reading Excel file...' });
 
-      // Check if it's a maintenance template (English or French)
-      // Supports: Uniformat Code, Component, Type of Work, and French equivalents
-      const isMaintenanceTemplate =
-        headerStr.includes('uniformat') ||
-        headerStr.includes('component') ||
-        headerStr.includes('composant') ||
-        headerStr.includes('type of work') ||
-        headerStr.includes('type de travaux') ||
-        headerStr.includes('élément') ||
-        headerStr.includes('element') ||
-        headerStr.includes('ouvrage') ||
-        headerStr.includes('intervention') ||
-        headerStr.includes('plan de maintien') ||
-        headerStr.includes('carnet') ||
-        headerStr.includes('entretien');
-
-      console.log(`[Inspection] Template type: ${isMaintenanceTemplate ? 'Maintenance Plan' : 'Standard Inspection'}`);
-
-      // Use appropriate parser
-      const parseResult = isMaintenanceTemplate
-        ? parseMaintenanceExcel(req.file.buffer)
-        : parseInspectionExcel(req.file.buffer);
+      // Parse Excel file using AI with progress callback
+      console.log(`[Inspection] Parsing Excel with AI for property ${property_id}...`);
+      const parseResult = await parseExcelWithAI(req.file.buffer, (progress) => {
+        sendEvent(progress);
+      });
 
       if (!parseResult.success && parseResult.success !== undefined) {
-        return res.status(400).json({
-          error: 'Failed to parse Excel',
-          message: parseResult.error,
-        });
+        sendEvent({ stage: 'error', message: parseResult.error });
+        res.end();
+        return;
       }
 
       if (parseResult.jobs.length === 0) {
-        return res.status(400).json({
-          error: 'No valid jobs found',
-          message: 'The Excel file does not contain any valid job data',
-          errors: parseResult.errors,
-        });
+        sendEvent({ stage: 'error', message: 'The Excel file does not contain any valid job data' });
+        res.end();
+        return;
       }
 
-      // Upload file to Supabase
-      const fileName = `${uuidv4()}-${req.file.originalname}`;
-      const filePath = `${property_id}/${fileName}`;
+      sendEvent({ stage: 'saving', message: 'Saving inspection record...' });
 
-      const uploadResult = await uploadToSupabase({
-        fileBuffer: req.file.buffer,
-        bucket: BUCKETS.INSPECTIONS,
-        filePath,
-        contentType: req.file.mimetype,
-        upsert: false,
-      });
+      // Upload file to Supabase (optional - don't block flow if it fails)
+      let fileUrl = null;
+      let inspection = null;
 
-      if (!uploadResult.success) {
-        return res.status(500).json({
-          error: 'Failed to upload file',
-          message: uploadResult.error,
+      try {
+        const fileName = `${uuidv4()}-${req.file.originalname}`;
+        const filePath = `${property_id}/${fileName}`;
+
+        const uploadResult = await uploadToSupabase({
+          fileBuffer: req.file.buffer,
+          bucket: BUCKETS.INSPECTIONS,
+          filePath,
+          contentType: req.file.mimetype,
+          upsert: false,
         });
-      }
 
-      // Get file URL
-      const fileUrl = getPublicUrl(BUCKETS.INSPECTIONS, uploadResult.data.path);
+        if (uploadResult.success) {
+          fileUrl = getPublicUrl(BUCKETS.INSPECTIONS, uploadResult.data.path);
+        } else {
+          console.warn('[Inspection] Supabase upload failed (non-blocking):', uploadResult.error);
+        }
+      } catch (uploadError) {
+        console.warn('[Inspection] Supabase upload failed (non-blocking):', uploadError.message);
+      }
 
       // Store inspection record in database
-      const inspection = await InspectionModel.create({
-        property_id,
-        file_url: fileUrl,
-        file_name: req.file.originalname,
-        file_size: req.file.size,
-        file_type: req.file.mimetype,
-        uploaded_by: userId,
-        parsed_job_count: parseResult.jobs.length,
-        status: 'parsed', // Successfully parsed
-      });
+      try {
+        inspection = await InspectionModel.create({
+          property_id,
+          file_url: fileUrl || `local://${req.file.originalname}`,
+          file_name: req.file.originalname,
+          file_size: req.file.size,
+          file_type: req.file.mimetype,
+          uploaded_by: userId,
+          parsed_job_count: parseResult.jobs.length,
+          status: 'parsed',
+        });
+      } catch (dbError) {
+        console.warn('[Inspection] DB record creation failed (non-blocking):', dbError.message);
+      }
 
-      console.log(`[Inspection] ✓ Upload complete - ${parseResult.jobs.length} jobs parsed`);
+      console.log(`[Inspection] ✓ Parsing complete - ${parseResult.jobs.length} jobs extracted${fileUrl ? ' (file stored)' : ' (file storage skipped)'}`);
 
       // Invalidate property cache
-      await cache.delPattern(`property:*:${property_id}*`);
+      try { await cache.delPattern(`property:*:${property_id}*`); } catch (_) {}
 
-      res.status(201).json({
-        success: true,
-        message: `Successfully uploaded inspection. Found ${parseResult.jobs.length} jobs.`,
-        inspection: {
-          id: inspection.id,
-          property_id: inspection.property_id,
-          file_name: inspection.file_name,
-          file_url: inspection.file_url,
-          uploaded_at: inspection.uploaded_at,
-          status: inspection.status,
-        },
-        parsedData: {
-          totalRows: parseResult.totalRows,
-          successCount: parseResult.successCount,
-          errorCount: parseResult.errorCount,
-          jobs: parseResult.jobs,
-          errors: parseResult.errors,
-          detectedColumns: parseResult.detectedColumns,
-          fieldMapping: parseResult.fieldMapping,
+      // Send final result
+      sendEvent({
+        stage: 'complete',
+        result: {
+          success: true,
+          message: `Successfully parsed inspection. Found ${parseResult.jobs.length} jobs.`,
+          inspection: inspection ? {
+            id: inspection.id,
+            property_id: inspection.property_id,
+            file_name: inspection.file_name,
+            file_url: inspection.file_url,
+            uploaded_at: inspection.uploaded_at,
+            status: inspection.status,
+          } : {
+            id: null,
+            property_id,
+            file_name: req.file.originalname,
+            file_url: null,
+            uploaded_at: new Date().toISOString(),
+            status: 'parsed',
+          },
+          parsedData: {
+            totalRows: parseResult.totalRows,
+            successCount: parseResult.successCount,
+            errorCount: parseResult.errorCount,
+            jobs: parseResult.jobs,
+            errors: parseResult.errors,
+            detectedColumns: parseResult.detectedColumns,
+            fieldMapping: parseResult.fieldMapping,
+          },
         },
       });
+
+      res.end();
     } catch (error) {
       console.error('[Inspection] Upload error:', error);
-      res.status(500).json({
-        error: 'Server error',
-        message: error.message,
-      });
+      // If headers already sent (SSE mode), send error event
+      if (res.headersSent) {
+        res.write(`data: ${JSON.stringify({ stage: 'error', message: error.message })}\n\n`);
+        res.end();
+      } else {
+        res.status(500).json({
+          error: 'Server error',
+          message: error.message,
+        });
+      }
     }
   },
 
@@ -222,24 +221,39 @@ const InspectionController = {
         });
       }
 
-      // Prepare jobs for creation
-      const jobsToCreate = jobsData.map((job) => ({
+      // Filter out jobs without budget_min and budget_max
+      const jobsWithBudget = jobsData.filter((job) =>
+        job.budget_min != null && job.budget_max != null &&
+        parseFloat(job.budget_min) > 0 && parseFloat(job.budget_max) > 0
+      );
+      const skippedCount = jobsData.length - jobsWithBudget.length;
+
+      if (jobsWithBudget.length === 0) {
+        return res.status(400).json({
+          error: 'No valid jobs',
+          message: 'All jobs are missing a budget. Please add budget min and max to at least one job before creating.',
+          skippedCount,
+        });
+      }
+
+      // Prepare jobs for creation — use budget_min/budget_max directly from frontend
+      const jobsToCreate = jobsWithBudget.map((job) => ({
         property_id: inspection.property_id,
-        manager_id: property.manager_id, // Use property's manager, not the uploader
+        manager_id: property.manager_id,
         title: job.title,
         description: job.description || '',
         category: job.category || 'Other',
         urgency: job.urgency || 'Medium',
-        budget_min: job.budget ? job.budget * 0.8 : null, // 20% range
-        budget_max: job.budget ? job.budget * 1.2 : null,
-        budget_visible: job.budget ? true : false,
+        budget_min: parseFloat(job.budget_min),
+        budget_max: parseFloat(job.budget_max),
+        budget_visible: true,
         location: job.location || null,
         due_date: job.dueDate || null,
         status: 'Open',
       }));
 
       // Bulk create jobs
-      console.log(`[Inspection] Creating ${jobsToCreate.length} jobs from inspection ${inspectionId}...`);
+      console.log(`[Inspection] Creating ${jobsToCreate.length} jobs from inspection ${inspectionId} (${skippedCount} skipped - missing budget)...`);
       const createdJobs = await bulkCreateJobs(jobsToCreate);
 
       // Update inspection status to completed
@@ -256,8 +270,9 @@ const InspectionController = {
 
       res.status(201).json({
         success: true,
-        message: `Successfully created ${createdJobs.length} jobs from inspection`,
+        message: `Successfully created ${createdJobs.length} jobs from inspection${skippedCount > 0 ? ` (${skippedCount} skipped - missing budget)` : ''}`,
         jobs: createdJobs,
+        skippedCount,
         inspection: {
           id: inspection.id,
           status: 'completed',
@@ -328,8 +343,8 @@ const InspectionController = {
       // Convert Blob to Buffer
       const buffer = Buffer.from(await downloadResult.data.arrayBuffer());
 
-      // Parse Excel
-      const parseResult = parseInspectionExcel(buffer);
+      // Parse Excel with AI
+      const parseResult = await parseExcelWithAI(buffer);
 
       res.json({
         success: true,

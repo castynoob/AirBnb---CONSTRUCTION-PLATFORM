@@ -12,7 +12,7 @@ import { BUCKETS } from '../config/supabase.js';
 // POST /api/reviews
 export const addReview = async (req, res) => {
   try {
-    const { reviewed_user_id, job_id, rating, comment } = req.body;
+    const { reviewed_user_id, job_id, rating, comment, rating_quality, rating_timeliness, rating_communication, rating_value, image_types } = req.body;
     const reviewer_id = req.user.id;
     const files = req.files || [];
 
@@ -27,6 +27,22 @@ export const addReview = async (req, res) => {
     if (rating < 1 || rating > 5) {
       return res.status(400).json({ message: "Rating must be between 1 and 5" });
     }
+
+    // Validate category ratings if provided
+    const categoryRatings = {};
+    for (const key of ['rating_quality', 'rating_timeliness', 'rating_communication', 'rating_value']) {
+      const val = Number(req.body[key]);
+      if (val && (val < 1 || val > 5)) {
+        return res.status(400).json({ message: `${key} must be between 1 and 5` });
+      }
+      if (val) categoryRatings[key] = val;
+    }
+
+    // Parse image_types JSON if provided
+    let parsedImageTypes = [];
+    try {
+      parsedImageTypes = image_types ? JSON.parse(image_types) : [];
+    } catch { parsedImageTypes = []; }
 
     // Verify the job exists and is completed
     // NOTE: jobs.entrepreneur_id stores USER ID (not entrepreneur_profiles.id)
@@ -80,19 +96,19 @@ export const addReview = async (req, res) => {
       return res.status(400).json({ message: "You have already reviewed this job" });
     }
 
-    // Create review without images first
-    const review = await createReview(reviewer_id, reviewed_user_id, job_id, rating, comment);
+    // Create review with category ratings
+    const review = await createReview(reviewer_id, reviewed_user_id, job_id, rating, comment, categoryRatings);
 
-    // Upload images if any
+    // Upload images if any (with before/after type support)
     const uploadedImages = [];
     if (files.length > 0) {
-      for (const file of files) {
+      for (let idx = 0; idx < files.length; idx++) {
+        const file = files[idx];
+        const imageType = parsedImageTypes[idx] || 'general';
         try {
-          // Generate unique filename
           const uniqueFileName = generateUniqueFileName(file.originalname);
           const filePath = `reviews/${review.id}/${uniqueFileName}`;
 
-          // Upload to Supabase
           const uploadResult = await uploadToSupabase({
             fileBuffer: file.buffer,
             bucket: BUCKETS.REVIEW_IMAGES,
@@ -102,22 +118,19 @@ export const addReview = async (req, res) => {
           });
 
           if (uploadResult.success) {
-            // Get public URL
             const imageUrl = getPublicUrl(BUCKETS.REVIEW_IMAGES, uploadResult.data.path);
 
-            // Insert into images table with review_id
             const imageResult = await pool.query(
-              `INSERT INTO images (review_id, image_url, uploaded_by, created_at)
-               VALUES ($1, $2, $3, NOW())
+              `INSERT INTO images (review_id, image_url, uploaded_by, image_type, created_at)
+               VALUES ($1, $2, $3, $4, NOW())
                RETURNING *`,
-              [review.id, imageUrl, reviewer_id]
+              [review.id, imageUrl, reviewer_id, imageType]
             );
 
             uploadedImages.push(imageResult.rows[0]);
           }
         } catch (uploadError) {
           console.error("Error uploading review image:", uploadError);
-          // Continue with next image if one fails
         }
       }
     }
@@ -171,14 +184,16 @@ export const getReviewByJob = async (req, res) => {
     // Get all reviews for this job
     const allReviews = await getReviewByJobId(job_id);
 
-    // Filter to only get the review written by the current user
+    // Review written BY the current user
     const userReview = allReviews.filter(review => String(review.reviewer_id) === String(reviewer_id));
+    // Review written ABOUT the current user (received)
+    const receivedReview = allReviews.filter(review => String(review.reviewed_id) === String(reviewer_id));
 
-    console.log(`📝 Get Review: Job ${job_id} - User ${reviewer_id} - Found: ${userReview.length} review(s)`);
+    console.log(`📝 Get Review: Job ${job_id} - User ${reviewer_id} - Written: ${userReview.length}, Received: ${receivedReview.length}`);
 
-    // ✅ Instead of 404, just return an empty array with 200 OK
     return res.status(200).json({
       review: userReview,
+      receivedReview: receivedReview,
       message: userReview.length > 0 ? "Review found" : "No review found for this job",
     });
   } catch (error) {

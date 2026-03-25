@@ -99,4 +99,11 @@ router.patch(
   favoriteController.updateNotes
 );
 
+router.patch(
+  '/favorites/:favoriteId/category',
+  authenticateToken,
+  authorizeRoles('property_manager'),
+  favoriteController.updateCategory
+);
+
 export default router;

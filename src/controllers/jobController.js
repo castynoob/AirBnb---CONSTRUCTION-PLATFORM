@@ -26,6 +26,16 @@ export const createJob = async (req, res) => {
     }
 
     const manager_id = managerProfile.rows[0].id;
+    const { budget_min, budget_max } = req.body;
+
+    // Validate budget fields are provided
+    if (budget_min == null || budget_max == null) {
+      return res.status(400).json({ message: "Budget minimum and maximum are required" });
+    }
+    if (parseFloat(budget_min) > parseFloat(budget_max)) {
+      return res.status(400).json({ message: "Budget maximum must be greater than minimum" });
+    }
+
     const jobData = { ...req.body, manager_id };
 
     const newJob = await Job.createJob(jobData);
@@ -135,21 +145,24 @@ export const updateJob = async (req, res) => {
                     mu.id as manager_user_id,
                     j.entrepreneur_id as entrepreneur_user_id,
                     eu.first_name as entrepreneur_first_name,
-                    eu.last_name as entrepreneur_last_name
+                    eu.last_name as entrepreneur_last_name,
+                    ep.company_name as entrepreneur_company_name
              FROM jobs j
              LEFT JOIN properties p ON j.property_id::uuid = p.id
              LEFT JOIN manager_profiles mp ON j.manager_id = mp.id
              LEFT JOIN users mu ON mp.user_id = mu.id
              LEFT JOIN users eu ON j.entrepreneur_id::uuid = eu.id
+             LEFT JOIN entrepreneur_profiles ep ON eu.id = ep.user_id
              WHERE j.id = $1`,
             [jobId]
           );
 
           if (jobDetails.rows[0]) {
             const job = jobDetails.rows[0];
-            const contractorName = job.entrepreneur_first_name && job.entrepreneur_last_name
-              ? `${job.entrepreneur_first_name} ${job.entrepreneur_last_name}`
-              : 'Contractor';
+            const contractorName = job.entrepreneur_company_name
+              || (job.entrepreneur_first_name && job.entrepreneur_last_name
+                ? `${job.entrepreneur_first_name} ${job.entrepreneur_last_name}`
+                : 'Contractor');
 
             // Notify manager when job status changes to "in_progress" or "ongoing"
             const statusLower = updateFields.status.toLowerCase();
@@ -227,29 +240,164 @@ export const deleteJob = async (req, res) => {
   try {
     const jobId = req.params.id;
 
-    // Get job details before deleting for logging
+    // Get job details before deleting
     const job = await Job.getJobById(jobId);
+    if (!job) {
+      return res.status(404).json({ message: "Job not found" });
+    }
 
-    await Job.deleteJob(jobId);
+    // Ownership check
+    const managerProfile = await pool.query(
+      `SELECT id FROM manager_profiles WHERE user_id = $1`,
+      [req.user.id]
+    );
+    if (!managerProfile.rows[0] || String(job.manager_id) !== String(managerProfile.rows[0].id)) {
+      return res.status(403).json({ message: "You can only delete your own jobs" });
+    }
 
-    // Log user activity
-    if (job) {
-      const ipAddress = req.ip || req.headers['x-forwarded-for'] || req.connection?.remoteAddress;
-      const userAgent = req.headers['user-agent'];
-      await createUserActivityLog(
-        req.user.id,
-        ActivityActions.JOB_CANCELLED,
-        EntityTypes.JOB,
-        jobId,
-        { title: job.title, action: 'deleted' },
-        ipAddress,
-        userAgent
+    // Status guard: block deletion if ongoing or completed
+    if (job.status === 'ongoing' || job.status === 'completed') {
+      return res.status(400).json({
+        message: `Cannot delete a job that is ${job.status}. Only open or accepted jobs can be deleted.`
+      });
+    }
+
+    // Collect all bidders before deletion (CASCADE will remove bids)
+    const biddersResult = await pool.query(
+      `SELECT b.id as bid_id, b.amount, b.status, ep.user_id as entrepreneur_user_id,
+              u.first_name, u.last_name
+       FROM bids b
+       JOIN entrepreneur_profiles ep ON b.entrepreneur_id = ep.id
+       JOIN users u ON ep.user_id = u.id
+       WHERE b.job_id = $1`,
+      [jobId]
+    );
+    const bidders = biddersResult.rows;
+
+    // Cancel active contract if one exists (before CASCADE delete)
+    const contractResult = await pool.query(
+      `UPDATE contracts SET status = 'cancelled', updated_at = NOW()
+       WHERE job_id = $1 AND status IN ('active', 'work_completed')
+       RETURNING id`,
+      [jobId]
+    );
+    if (contractResult.rows.length > 0) {
+      await pool.query(
+        `INSERT INTO contract_events (contract_id, event_type, actor_user_id, actor_role, event_data)
+         VALUES ($1, 'contract_cancelled', $2, 'manager', $3)`,
+        [contractResult.rows[0].id, req.user.id, JSON.stringify({ reason: 'job_deleted', job_title: job.title })]
       );
     }
 
-    res.json({ message: "Job deleted successfully" });
+    // Notify all bidders BEFORE deleting (job_id FK constraint)
+    const io = getIO();
+    for (const bidder of bidders) {
+      const isApproved = bidder.status === 'approved';
+      const content = isApproved
+        ? `The job "${job.title}" has been cancelled by the property manager. Your accepted bid has been cancelled.`
+        : `The job "${job.title}" has been removed by the property manager.`;
+
+      try {
+        await createNotification({
+          userId: bidder.entrepreneur_user_id,
+          type: 'job_deleted',
+          jobId: jobId,
+          jobTitle: job.title,
+          content
+        });
+      } catch (notifErr) {
+        console.warn("Could not create notification for bidder:", notifErr.message);
+      }
+
+      if (io) {
+        io.to(bidder.entrepreneur_user_id.toString()).emit('job_deleted', {
+          jobId,
+          jobTitle: job.title,
+          bidId: bidder.bid_id,
+          wasApproved: isApproved,
+          message: content
+        });
+      }
+    }
+
+    // Delete the job (CASCADE handles bids, images, etc.)
+    await Job.deleteJob(jobId);
+
+    // Log user activity
+    const ipAddress = req.ip || req.headers['x-forwarded-for'] || req.connection?.remoteAddress;
+    const userAgent = req.headers['user-agent'];
+    await createUserActivityLog(
+      req.user.id,
+      ActivityActions.JOB_CANCELLED,
+      EntityTypes.JOB,
+      jobId,
+      { title: job.title, action: 'deleted', bidders_notified: bidders.length },
+      ipAddress,
+      userAgent
+    );
+
+    res.json({ message: "Job deleted successfully", bidders_notified: bidders.length });
   } catch (err) {
     console.error("❌ Error deleting job:", err);
+    res.status(500).json({ message: "Server error" });
+  }
+};
+
+// 📦 Archive/unarchive a job
+export const archiveJob = async (req, res) => {
+  try {
+    const jobId = req.params.id;
+    const { archive = true } = req.body;
+
+    const job = await Job.getJobById(jobId);
+    if (!job) {
+      return res.status(404).json({ message: "Job not found" });
+    }
+
+    // Ownership check
+    const managerProfile = await pool.query(
+      `SELECT id FROM manager_profiles WHERE user_id = $1`,
+      [req.user.id]
+    );
+    if (!managerProfile.rows[0] || String(job.manager_id) !== String(managerProfile.rows[0].id)) {
+      return res.status(403).json({ message: "You can only archive your own jobs" });
+    }
+
+    await pool.query(
+      `UPDATE jobs SET is_archived = $1, updated_at = NOW() WHERE id = $2`,
+      [archive, jobId]
+    );
+
+    res.json({
+      message: archive ? "Job archived successfully" : "Job restored successfully",
+      is_archived: archive
+    });
+  } catch (err) {
+    console.error("❌ Error archiving job:", err);
+    res.status(500).json({ message: "Server error" });
+  }
+};
+
+// 📦 Get archived jobs for the current manager
+export const getArchivedJobs = async (req, res) => {
+  try {
+    const managerProfile = await pool.query(
+      `SELECT id FROM manager_profiles WHERE user_id = $1`,
+      [req.user.id]
+    );
+
+    if (!managerProfile.rows[0]) {
+      return res.status(403).json({ message: "Manager profile not found" });
+    }
+
+    const jobs = await Job.getArchivedJobsByManagerId(managerProfile.rows[0].id);
+    res.json({
+      message: "Archived jobs retrieved successfully",
+      count: jobs.length,
+      jobs
+    });
+  } catch (err) {
+    console.error("❌ Error fetching archived jobs:", err);
     res.status(500).json({ message: "Server error" });
   }
 };

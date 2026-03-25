@@ -24,6 +24,11 @@ router.use(authenticateToken);  // ✅ CHANGED THIS TOO
 router.get('/conversations', messageController.getConversations);
 
 // ============================================
+// GET ARCHIVED CONVERSATIONS (must be before :conversationId routes)
+// ============================================
+router.get('/conversations/archived', messageController.getArchivedConversations);
+
+// ============================================
 // START NEW CONVERSATION
 // ============================================
 router.post('/conversations', messageController.startConversation);
@@ -62,6 +67,12 @@ router.get('/can-message/:otherUserId', messageController.checkMessageAccess);
 // UPLOAD MESSAGE ATTACHMENT
 // ============================================
 router.post('/messages/upload-attachment', upload.single('file'), messageController.uploadAttachment);
+
+// ============================================
+// ARCHIVE / UNARCHIVE CONVERSATIONS
+// ============================================
+router.put('/conversations/:conversationId/archive', messageController.archiveConversation);
+router.put('/conversations/:conversationId/unarchive', messageController.unarchiveConversation);
 
 // ============================================
 // DIRECT MESSAGES (for property manager to access direct_messages table)

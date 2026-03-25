@@ -11,6 +11,10 @@ import { createNotification } from '../controllers/notificationController.js';
 
 let io = null;
 
+// Track recent email notifications to avoid spam (conversationId -> timestamp)
+const recentEmailNotifications = new Map();
+const EMAIL_COOLDOWN_MS = 10 * 60 * 1000; // 10 minutes between emails per conversation
+
 /**
  * Initialize Socket.io server
  * Called from server.js
@@ -89,6 +93,14 @@ const setupSocket = (server) => {
 
     // Log which rooms this socket is in
     console.log(`📋 Socket ${socket.id} rooms:`, Array.from(socket.rooms));
+
+    // Track online status in database
+    pool.query(
+      `INSERT INTO user_online_status (user_id, is_online, socket_id, last_seen_at)
+       VALUES ($1, true, $2, NOW())
+       ON CONFLICT (user_id) DO UPDATE SET is_online = true, socket_id = $2, last_seen_at = NOW()`,
+      [socket.userId, socket.id]
+    ).catch(err => console.error('Failed to update online status:', err));
 
     // ============================================
     // JOIN / LEAVE CONVERSATION
@@ -196,16 +208,24 @@ const setupSocket = (server) => {
 
         // Get sender and receiver details for email notification
         const senderResult = await pool.query(
-          'SELECT first_name, last_name FROM users WHERE id = $1',
+          `SELECT u.first_name, u.last_name, u.role, ep.company_name
+           FROM users u
+           LEFT JOIN entrepreneur_profiles ep ON u.id = ep.user_id AND u.role = 'entrepreneur'
+           WHERE u.id = $1`,
           [socket.userId]
         );
         const receiverResult = await pool.query(
-          'SELECT email, first_name, last_name FROM users WHERE id = $1',
+          `SELECT u.email, u.first_name, u.last_name, u.email_notifications,
+                  uos.is_online
+           FROM users u
+           LEFT JOIN user_online_status uos ON u.id = uos.user_id
+           WHERE u.id = $1`,
           [receiverId]
         );
 
-        const senderName = senderResult.rows[0]
-          ? `${senderResult.rows[0].first_name} ${senderResult.rows[0].last_name}`
+        const sender = senderResult.rows[0];
+        const senderName = sender
+          ? (sender.role === 'entrepreneur' && sender.company_name ? sender.company_name : `${sender.first_name} ${sender.last_name}`)
           : 'Someone';
 
         const receiverData = receiverResult.rows[0];
@@ -233,17 +253,27 @@ const setupSocket = (server) => {
           console.error('❌ Failed to save message notification:', notifError);
         }
 
-        // 📧 Send email notification (async, don't wait)
-        if (receiverData) {
-          const messagePreview = content.substring(0, 100) + (content.length > 100 ? '...' : '');
-          sendMessageNotificationEmail(
-            receiverData.email,
-            receiverData.first_name,
-            senderName,
-            messagePreview
-          ).catch(err => {
-            console.error('❌ Failed to send email notification:', err);
-          });
+        // 📧 Send email notification only if receiver is OFFLINE and has email_notifications enabled
+        if (receiverData && !receiverData.is_online && receiverData.email_notifications !== false) {
+          const emailKey = `${receiverId}_${actualConversationId}`;
+          const lastSent = recentEmailNotifications.get(emailKey);
+          const now = Date.now();
+
+          if (!lastSent || (now - lastSent) > EMAIL_COOLDOWN_MS) {
+            recentEmailNotifications.set(emailKey, now);
+            const messagePreview = content.substring(0, 100) + (content.length > 100 ? '...' : '');
+            sendMessageNotificationEmail(
+              receiverData.email,
+              receiverData.first_name,
+              senderName,
+              messagePreview
+            ).catch(err => {
+              console.error('❌ Failed to send email notification:', err);
+            });
+            console.log(`📧 Email notification sent to offline user ${receiverId}`);
+          } else {
+            console.log(`📧 Email skipped for ${receiverId} (cooldown: ${Math.round((EMAIL_COOLDOWN_MS - (now - lastSent)) / 1000)}s remaining)`);
+          }
         }
 
         console.log(`✅ Message delivery complete`);
@@ -302,6 +332,15 @@ const setupSocket = (server) => {
     // ============================================
     socket.on('disconnect', (reason) => {
       console.log(`❌ User disconnected: ${socket.userId} - Reason: ${reason}`);
+      // Update online status — only set offline if no other sockets for this user
+      const userSockets = io.sockets.adapter.rooms.get(socket.userId.toString());
+      if (!userSockets || userSockets.size === 0) {
+        pool.query(
+          `UPDATE user_online_status SET is_online = false, last_seen_at = NOW(), socket_id = NULL
+           WHERE user_id = $1`,
+          [socket.userId]
+        ).catch(err => console.error('Failed to update offline status:', err));
+      }
     });
 
     socket.on('error', (error) => {

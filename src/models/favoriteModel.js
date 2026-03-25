@@ -14,20 +14,21 @@ const favoriteModel = {
    * @param {string} notes - Optional notes
    * @returns {Object} Created favorite record
    */
-  async addFavorite(managerId, entrepreneurId, jobId = null, bidId = null, notes = null) {
+  async addFavorite(managerId, entrepreneurId, jobId = null, bidId = null, notes = null, category = null) {
     // Allow multiple bids from same entrepreneur by including bid_id in conflict check
     const query = `
-      INSERT INTO favorites (manager_id, entrepreneur_id, job_id, bid_id, notes)
-      VALUES ($1, $2, $3, $4, $5)
+      INSERT INTO favorites (manager_id, entrepreneur_id, job_id, bid_id, notes, category)
+      VALUES ($1, $2, $3, $4, $5, $6)
       ON CONFLICT ON CONSTRAINT favorites_manager_entrepreneur_bid_unique
       DO UPDATE SET
         job_id = COALESCE($3, favorites.job_id),
         notes = COALESCE($5, favorites.notes),
+        category = COALESCE($6, favorites.category),
         created_at = NOW()
       RETURNING *
     `;
 
-    const values = [managerId, entrepreneurId, jobId, bidId, notes];
+    const values = [managerId, entrepreneurId, jobId, bidId, notes, category];
     const result = await pool.query(query, values);
     return result.rows[0];
   },
@@ -63,6 +64,7 @@ const favoriteModel = {
         f.job_id,
         f.bid_id,
         f.notes,
+        f.category,
         f.created_at as favorited_at,
         ep.company_name,
         ep.license_number,
@@ -230,6 +232,17 @@ const favoriteModel = {
     `;
 
     const result = await pool.query(query, [favoriteId, notes]);
+    return result.rows[0];
+  },
+
+  async updateCategory(favoriteId, category) {
+    const query = `
+      UPDATE favorites
+      SET category = $2
+      WHERE id = $1
+      RETURNING *
+    `;
+    const result = await pool.query(query, [favoriteId, category]);
     return result.rows[0];
   }
 };

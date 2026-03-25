@@ -13,7 +13,7 @@ const favoriteController = {
   async addFavorite(req, res) {
     try {
       const userId = req.user.id; // User ID from JWT
-      const { entrepreneurId, jobId, bidId, notes } = req.body;
+      const { entrepreneurId, jobId, bidId, notes, category } = req.body;
 
       console.log('📝 ADD FAVORITE REQUEST:', {
         userId,
@@ -47,13 +47,21 @@ const favoriteController = {
       const managerId = managerProfileResult.rows[0].id;
       console.log('✅ Manager Profile ID:', managerId);
 
+      // Auto-fill category from job if not provided
+      let favCategory = category || null;
+      if (!favCategory && jobId) {
+        const jobResult = await pool.query('SELECT category FROM jobs WHERE id = $1', [jobId]);
+        if (jobResult.rows[0]?.category) favCategory = jobResult.rows[0].category;
+      }
+
       // Add to favorites
       const favorite = await favoriteModel.addFavorite(
         managerId,
         entrepreneurId,
         jobId,
         bidId,
-        notes
+        notes,
+        favCategory
       );
 
       console.log('✅ FAVORITE ADDED:', favorite);
@@ -362,6 +370,34 @@ const favoriteController = {
         message: 'Failed to update notes',
         error: error.message
       });
+    }
+  },
+
+  async updateCategory(req, res) {
+    try {
+      const { favoriteId } = req.params;
+      const { category } = req.body;
+      const userId = req.user.id;
+
+      const managerProfileResult = await pool.query(
+        'SELECT id FROM manager_profiles WHERE user_id = $1',
+        [userId]
+      );
+      if (managerProfileResult.rows.length === 0) {
+        return res.status(404).json({ success: false, message: 'Manager profile not found' });
+      }
+
+      const managerId = managerProfileResult.rows[0].id;
+      const favorite = await favoriteModel.getFavoriteById(favoriteId);
+      if (!favorite || favorite.manager_id !== managerId) {
+        return res.status(404).json({ success: false, message: 'Favorite not found' });
+      }
+
+      const updated = await favoriteModel.updateCategory(favoriteId, category);
+      res.json({ success: true, message: 'Category updated', favorite: updated });
+    } catch (error) {
+      console.error('Error updating category:', error);
+      res.status(500).json({ success: false, message: 'Failed to update category' });
     }
   }
 };

@@ -571,3 +571,86 @@ export const deletePropertyImage = async (req, res) => {
     });
   }
 };
+
+// 🟢 Get maintenance log for a property
+export const getPropertyMaintenanceLog = async (req, res) => {
+  try {
+    const { id } = req.params;
+    if (!validateUUID(id)) return res.status(400).json({ message: 'Invalid property ID' });
+
+    // Verify ownership
+    const managerResult = await pool.query(
+      'SELECT id FROM manager_profiles WHERE user_id = $1', [req.user.id]
+    );
+    if (!managerResult.rows[0]) return res.status(403).json({ message: 'Not a manager' });
+
+    const propCheck = await pool.query(
+      'SELECT id, building_name, address, city FROM properties WHERE id = $1 AND manager_id = $2',
+      [id, managerResult.rows[0].id]
+    );
+    if (!propCheck.rows[0]) return res.status(404).json({ message: 'Property not found' });
+
+    // Get all jobs for this property with contract + entrepreneur + review info
+    const jobsResult = await pool.query(`
+      SELECT
+        j.id, j.title, j.description, j.category, j.urgency, j.status,
+        j.due_date, j.estimated_duration_days, j.budget_min, j.budget_max,
+        j.created_at, j.is_archived,
+        c.id AS contract_id, c.contract_amount, c.status AS contract_status,
+        c.work_started_at, c.work_completed_at, c.created_at AS contract_created_at,
+        c.mutual_confirmation_completed_at,
+        ep.company_name, ep.license_number, ep.specializations,
+        u.first_name AS contractor_first_name, u.last_name AS contractor_last_name, u.email AS contractor_email,
+        (SELECT COUNT(*) FROM images WHERE job_id = j.id) AS image_count,
+        (SELECT json_agg(json_build_object('id', r.id, 'rating', r.rating, 'comment', r.comment, 'created_at', r.created_at, 'reviewer_id', r.reviewer_id))
+         FROM reviews r WHERE r.job_id = j.id) AS reviews
+      FROM jobs j
+      LEFT JOIN contracts c ON c.job_id = j.id
+      LEFT JOIN entrepreneur_profiles ep ON c.entrepreneur_id = ep.id
+      LEFT JOIN users u ON ep.user_id = u.id
+      WHERE j.property_id = $1
+      ORDER BY j.created_at DESC
+    `, [id]);
+
+    const jobs = jobsResult.rows;
+    const summary = {
+      total: jobs.length,
+      open: jobs.filter(j => j.status === 'open').length,
+      ongoing: jobs.filter(j => j.status === 'ongoing' || j.status === 'accepted').length,
+      completed: jobs.filter(j => j.status === 'completed').length,
+      archived: jobs.filter(j => j.is_archived).length,
+    };
+
+    // Get unique contractors
+    const contractors = {};
+    jobs.forEach(j => {
+      if (j.company_name && j.contract_id) {
+        const key = j.company_name;
+        if (!contractors[key]) {
+          contractors[key] = {
+            company_name: j.company_name,
+            license_number: j.license_number,
+            contact_name: `${j.contractor_first_name || ''} ${j.contractor_last_name || ''}`.trim(),
+            email: j.contractor_email,
+            specializations: j.specializations,
+            jobs_count: 0,
+            total_spent: 0,
+          };
+        }
+        contractors[key].jobs_count++;
+        if (j.contract_amount) contractors[key].total_spent += Number(j.contract_amount);
+      }
+    });
+
+    res.json({
+      success: true,
+      property: propCheck.rows[0],
+      summary,
+      jobs,
+      contractors: Object.values(contractors),
+    });
+  } catch (error) {
+    console.error('Error getting maintenance log:', error);
+    res.status(500).json({ message: 'Server error' });
+  }
+};

@@ -369,52 +369,42 @@ export const generateInspectionTemplate = (language = 'fr') => {
     // French Maintenance Plan Template - "Plan de maintien et Carnet d'entretien"
     const templateData = [
       {
-        'Échéance': 2025,
-        'Code Uniformat': 'B1030',
-        'Composante': 'Structures de support en bois des balcons',
+        'Composante': 'Réseaux de distribution d\'eau domestique et de drainage sanitaire',
+        'Type de travaux': 'Provision pour réparation majeure',
+        'Titre': 'Réparation majeure d\'une partie des réseaux de plomberie',
+        'Description': 'Les travaux, lorsque requis, consistent à remplacer les sections du réseau d\'eau, ou du réseau de drainage, dont les composantes sont désuètes. Pour les sections dissimulées dans des murs et plafonds, ces interventions peuvent être difficiles à mettre en œuvre puisqu\'elles nécessitent des ouvertures, des travaux de remise en état et de la finition.',
+        'Coût actuel estimé': 627,
+        'Coût futur estimé après taxes': 721,
+      },
+      {
+        'Composante': 'Entrée électrique et distribution principale',
+        'Type de travaux': 'Provision pour remplacement',
+        'Titre': 'Remplacement de composants du réseau de distribution électrique',
+        'Description': 'Les travaux, lorsque requis, consistent à remplacer les composantes endommagées ou désuètes.',
+        'Coût actuel estimé': 870,
+        'Coût futur estimé après taxes': 1000,
+      },
+      {
+        'Composante': 'Toiture - Membrane multicouche',
+        'Type de travaux': 'Provision pour réfection',
+        'Titre': 'Réfection de la membrane de toiture',
+        'Description': 'Les travaux consistent à retirer la membrane existante, vérifier l\'état du pontage et de l\'isolation, puis installer une nouvelle membrane multicouche conforme aux normes en vigueur.',
+        'Coût actuel estimé': 15400,
+        'Coût futur estimé après taxes': 17710,
+      },
+      {
+        'Composante': 'Système de ventilation et climatisation (CVAC)',
+        'Type de travaux': 'Entretien préventif',
+        'Titre': 'Entretien annuel du système CVAC',
+        'Description': 'Inspection et nettoyage des conduits, remplacement des filtres, vérification du fonctionnement des unités de chauffage et de climatisation, calibration des thermostats.',
+        'Coût actuel estimé': 2300,
+        'Coût futur estimé après taxes': 2645,
+      },
+      {
+        'Composante': 'Revêtements de sol - Aires communes',
         'Type de travaux': 'Remplacement',
-        'Titre': 'Réparer la structure en bois des balcons',
-        'Description': 'Retirer le pontage ou le platelage en place ainsi que les fascias et soffites protégeant la structure de bois. Démolir la structure et la structure en prenant soin de la fixer solidement au bâtiment et aux colonnes de support. Installer les fascias et soffites qui protégeront la structure de bois des intempéries. Mettre en place le nouveau revêtement de plancher (platelage ou pontage).',
-        'Coût actuel estimé': 13217,
-        'Coût futur estimé après taxes': 15197,
-      },
-      {
-        'Échéance': 2025,
-        'Code Uniformat': 'D2010',
-        'Composante': 'Système de plomberie - Tuyauterie',
-        'Type de travaux': 'Réparation majeure',
-        'Titre': 'Remplacement des conduites d\'eau principales',
-        'Description': 'Remplacer les conduites d\'eau en cuivre vieillissantes par des conduites en PEX. Inclut la fermeture temporaire de l\'eau, les travaux de percement et la remise en état des surfaces.',
-        'Coût actuel estimé': 8500,
-        'Coût futur estimé après taxes': 9775,
-      },
-      {
-        'Échéance': 2026,
-        'Code Uniformat': 'B3010',
-        'Composante': 'Toiture - Membrane et bardeaux',
-        'Type de travaux': 'Entretien',
-        'Titre': 'Inspection et réparation de la toiture',
-        'Description': 'Effectuer une inspection complète de la toiture. Réparer les zones endommagées, remplacer les bardeaux manquants et vérifier l\'étanchéité des solins.',
-        'Coût actuel estimé': 3200,
-        'Coût futur estimé après taxes': 3680,
-      },
-      {
-        'Échéance': 2024,
-        'Code Uniformat': 'D5020',
-        'Composante': 'Système électrique - Panneau principal',
-        'Type de travaux': 'Urgence',
-        'Titre': 'Mise à niveau du panneau électrique',
-        'Description': 'Remplacer le panneau électrique de 100A par un panneau de 200A pour répondre aux besoins actuels. Mettre à jour le câblage non conforme aux normes.',
-        'Coût actuel estimé': 4500,
-        'Coût futur estimé après taxes': 5175,
-      },
-      {
-        'Échéance': 2027,
-        'Code Uniformat': 'C3020',
-        'Composante': 'Revêtements de sol - Planchers',
-        'Type de travaux': 'Provision',
-        'Titre': 'Remplacement des revêtements de sol communs',
-        'Description': 'Remplacer les revêtements de sol usés dans les aires communes (corridors, hall d\'entrée). Installation de nouveaux planchers en vinyle de luxe.',
+        'Titre': 'Remplacement des revêtements de sol dans les corridors',
+        'Description': 'Retirer les revêtements de sol usés dans les corridors et le hall d\'entrée. Installer de nouveaux revêtements en vinyle de luxe résistant au trafic élevé.',
         'Coût actuel estimé': 12000,
         'Coût futur estimé après taxes': 13800,
       },
@@ -426,12 +416,10 @@ export const generateInspectionTemplate = (language = 'fr') => {
 
     // Set column widths for French template
     worksheet['!cols'] = [
-      { wch: 12 }, // Échéance
-      { wch: 15 }, // Code Uniformat
-      { wch: 45 }, // Composante
-      { wch: 20 }, // Type de travaux
-      { wch: 45 }, // Titre
-      { wch: 80 }, // Description
+      { wch: 50 }, // Composante
+      { wch: 30 }, // Type de travaux
+      { wch: 50 }, // Titre
+      { wch: 90 }, // Description
       { wch: 20 }, // Coût actuel estimé
       { wch: 28 }, // Coût futur estimé après taxes
     ];

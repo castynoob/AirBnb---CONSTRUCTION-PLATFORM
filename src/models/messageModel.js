@@ -72,8 +72,14 @@ const messageModel = {
           WHEN c.participant1_id = $1 THEN c.participant2_id
           ELSE c.participant1_id
         END as other_user_id,
-        u.first_name || ' ' || u.last_name as other_user_name,
+        CASE
+          WHEN u.role = 'entrepreneur' AND ep.company_name IS NOT NULL AND ep.company_name != ''
+          THEN ep.company_name
+          ELSE u.first_name || ' ' || u.last_name
+        END as other_user_name,
+        u.first_name || ' ' || u.last_name as other_user_personal_name,
         u.role as other_user_role,
+        ep.company_name as company_name,
         (
           SELECT
             CASE
@@ -115,6 +121,7 @@ const messageModel = {
           ELSE c.participant1_id
         END = u.id
       )
+      LEFT JOIN entrepreneur_profiles ep ON u.id = ep.user_id AND u.role = 'entrepreneur'
       LEFT JOIN jobs j ON c.job_id = j.id
       LEFT JOIN properties p ON j.property_id = p.id
       LEFT JOIN bids b ON b.job_id = j.id
@@ -132,6 +139,7 @@ const messageModel = {
           ))
         )
       WHERE (c.participant1_id = $1 OR c.participant2_id = $1)
+        AND NOT ($1 = ANY(COALESCE(c.archived_by, '{}')))
     `;
 
     // Filter for property managers: only show residents and entrepreneurs
@@ -163,6 +171,81 @@ const messageModel = {
       });
     }
 
+    return result.rows;
+  },
+
+  // ============================================
+  // ARCHIVE / UNARCHIVE CONVERSATION
+  // ============================================
+  async archiveConversation(conversationId, userId) {
+    const query = `
+      UPDATE conversations
+      SET archived_by = array_append(COALESCE(archived_by, '{}'), $2::uuid),
+          updated_at = NOW()
+      WHERE id = $1
+        AND (participant1_id = $2 OR participant2_id = $2)
+        AND NOT ($2 = ANY(COALESCE(archived_by, '{}')))
+      RETURNING *
+    `;
+    const result = await pool.query(query, [conversationId, userId]);
+    return result.rows[0];
+  },
+
+  async unarchiveConversation(conversationId, userId) {
+    const query = `
+      UPDATE conversations
+      SET archived_by = array_remove(COALESCE(archived_by, '{}'), $2::uuid),
+          updated_at = NOW()
+      WHERE id = $1
+        AND (participant1_id = $2 OR participant2_id = $2)
+      RETURNING *
+    `;
+    const result = await pool.query(query, [conversationId, userId]);
+    return result.rows[0];
+  },
+
+  async getArchivedConversations(userId, userRole = null) {
+    let query = `
+      SELECT
+        c.*,
+        CASE
+          WHEN c.participant1_id = $1 THEN c.participant2_id
+          ELSE c.participant1_id
+        END as other_user_id,
+        CASE
+          WHEN u.role = 'entrepreneur' AND ep2.company_name IS NOT NULL AND ep2.company_name != ''
+          THEN ep2.company_name
+          ELSE u.first_name || ' ' || u.last_name
+        END as other_user_name,
+        u.role as other_user_role,
+        (
+          SELECT
+            CASE
+              WHEN content IS NOT NULL AND content != '' THEN content
+              WHEN image_url IS NOT NULL THEN '📷 Photo'
+              WHEN attachments IS NOT NULL THEN '📎 Attachment'
+              ELSE ''
+            END
+          FROM messages
+          WHERE conversation_id = c.id
+          ORDER BY created_at DESC
+          LIMIT 1
+        ) as last_message,
+        j.title as job_title
+      FROM conversations c
+      LEFT JOIN users u ON (
+        CASE
+          WHEN c.participant1_id = $1 THEN c.participant2_id
+          ELSE c.participant1_id
+        END = u.id
+      )
+      LEFT JOIN entrepreneur_profiles ep2 ON u.id = ep2.user_id AND u.role = 'entrepreneur'
+      LEFT JOIN jobs j ON c.job_id = j.id
+      WHERE (c.participant1_id = $1 OR c.participant2_id = $1)
+        AND $1 = ANY(COALESCE(c.archived_by, '{}'))
+      ORDER BY c.last_message_at DESC
+    `;
+    const result = await pool.query(query, [userId]);
     return result.rows;
   },
 

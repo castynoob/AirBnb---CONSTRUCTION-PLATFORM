@@ -574,6 +574,62 @@ const messageController = {
         message: 'Failed to send message'
       });
     }
+  },
+
+  // ============================================
+  // ARCHIVE CONVERSATION
+  // ============================================
+  async archiveConversation(req, res) {
+    try {
+      const userId = req.user.id;
+      const { conversationId } = req.params;
+
+      const result = await messageModel.archiveConversation(conversationId, userId);
+      if (!result) {
+        return res.status(404).json({ success: false, message: 'Conversation not found or already archived' });
+      }
+
+      res.json({ success: true, message: 'Conversation archived' });
+    } catch (error) {
+      console.error('Archive conversation error:', error);
+      res.status(500).json({ success: false, message: 'Failed to archive conversation' });
+    }
+  },
+
+  // ============================================
+  // UNARCHIVE CONVERSATION
+  // ============================================
+  async unarchiveConversation(req, res) {
+    try {
+      const userId = req.user.id;
+      const { conversationId } = req.params;
+
+      const result = await messageModel.unarchiveConversation(conversationId, userId);
+      if (!result) {
+        return res.status(404).json({ success: false, message: 'Conversation not found' });
+      }
+
+      res.json({ success: true, message: 'Conversation restored' });
+    } catch (error) {
+      console.error('Unarchive conversation error:', error);
+      res.status(500).json({ success: false, message: 'Failed to restore conversation' });
+    }
+  },
+
+  // ============================================
+  // GET ARCHIVED CONVERSATIONS
+  // ============================================
+  async getArchivedConversations(req, res) {
+    try {
+      const userId = req.user.id;
+      const userRole = req.user.role;
+
+      const conversations = await messageModel.getArchivedConversations(userId, userRole);
+      res.json({ success: true, conversations });
+    } catch (error) {
+      console.error('Get archived conversations error:', error);
+      res.status(500).json({ success: false, message: 'Failed to get archived conversations' });
+    }
   }
 };
 

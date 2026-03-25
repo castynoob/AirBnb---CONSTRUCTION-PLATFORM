@@ -584,12 +584,21 @@ const ContractController = {
         return res.status(403).json({ error: 'You are not part of this contract' });
       }
 
-      // Contract must be completed (manager already approved)
-      if (contract.status !== 'completed') {
+      // Contract must be completed or work must be marked complete
+      // (entrepreneur marks work complete → job status = completed, but contract status may still be active)
+      if (contract.status !== 'completed' && contract.status !== 'active' && contract.status !== 'in_progress') {
         return res.status(400).json({
-          error: 'Contract must be completed before confirming',
+          error: 'Contract must be active or completed before confirming',
           current_status: contract.status
         });
+      }
+
+      // If PM is confirming and contract isn't completed yet, mark it completed now
+      if (isManager && contract.status !== 'completed') {
+        await pool.query(
+          `UPDATE contracts SET status = 'completed', updated_at = NOW() WHERE id = $1`,
+          [id]
+        );
       }
 
       // Check if already confirmed
@@ -600,15 +609,25 @@ const ContractController = {
         return res.status(400).json({ error: 'You have already confirmed completion' });
       }
 
-      // Set the appropriate confirmation
-      const confirmColumn = isManager ? 'manager_completion_confirmed' : 'contractor_completion_confirmed';
-      const confirmAtColumn = isManager ? 'manager_confirmed_at' : 'contractor_confirmed_at';
       const role = isManager ? 'manager' : 'entrepreneur';
 
-      await pool.query(
-        `UPDATE contracts SET ${confirmColumn} = true, ${confirmAtColumn} = NOW(), updated_at = NOW() WHERE id = $1`,
-        [id]
-      );
+      if (isManager) {
+        // PM confirmation auto-confirms BOTH parties
+        await pool.query(
+          `UPDATE contracts SET
+            manager_completion_confirmed = true, manager_confirmed_at = NOW(),
+            contractor_completion_confirmed = true, contractor_confirmed_at = COALESCE(contractor_confirmed_at, NOW()),
+            updated_at = NOW()
+           WHERE id = $1`,
+          [id]
+        );
+      } else {
+        // Entrepreneur can still confirm on their side (mark complete triggers this)
+        await pool.query(
+          `UPDATE contracts SET contractor_completion_confirmed = true, contractor_confirmed_at = NOW(), updated_at = NOW() WHERE id = $1`,
+          [id]
+        );
+      }
 
       // Log event
       await pool.query(

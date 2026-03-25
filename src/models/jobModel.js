@@ -47,7 +47,7 @@ export const createJob = async ({
 
 // 🟡 Get all jobs
 export const getAllJobs = async () => {
-  const result = await pool.query(`SELECT * FROM jobs ORDER BY created_at DESC`);
+  const result = await pool.query(`SELECT * FROM jobs WHERE (is_archived = false OR is_archived IS NULL) ORDER BY created_at DESC`);
   return result.rows;
 };
 
@@ -92,7 +92,16 @@ export const deleteJob = async (id) => {
 // 🟠 Get all jobs by manager ID
 export const getJobsByManagerId = async (manager_id) => {
   const result = await pool.query(
-    `SELECT * FROM jobs WHERE manager_id = $1 ORDER BY created_at DESC`,
+    `SELECT * FROM jobs WHERE manager_id = $1 AND (is_archived = false OR is_archived IS NULL) ORDER BY created_at DESC`,
+    [manager_id]
+  );
+  return result.rows;
+};
+
+// 📦 Get archived jobs by manager ID
+export const getArchivedJobsByManagerId = async (manager_id) => {
+  const result = await pool.query(
+    `SELECT * FROM jobs WHERE manager_id = $1 AND is_archived = true ORDER BY updated_at DESC`,
     [manager_id]
   );
   return result.rows;

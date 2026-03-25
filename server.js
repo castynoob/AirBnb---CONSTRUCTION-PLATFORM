@@ -21,7 +21,7 @@ import { getRedisInfo, pingRedis, closeRedis } from "./src/config/redis.js";
 // ============================================
 // SUPABASE CONFIGURATION
 // ============================================
-import { getSupabaseInfo } from "./src/config/supabase.js";
+import { getSupabaseInfo, initializeSupabaseBuckets } from "./src/config/supabase.js";
 
 // ============================================
 // ROUTE IMPORTS
@@ -53,6 +53,9 @@ import disputeRoutes from "./src/routes/disputeRoutes.js";
 import geocodeRoutes from "./src/routes/geocodeRoutes.js";
 import promoterRoutes from "./src/routes/promoterRoutes.js";
 import promoCodeRoutes from "./src/routes/promoCodeRoutes.js";
+import progressRoutes from "./src/routes/progressRoutes.js";
+import documentRoutes from "./src/routes/documentRoutes.js";
+import financialRoutes from "./src/routes/financialRoutes.js";
 
 // ============================================
 // SOCKET SETUP
@@ -98,6 +101,7 @@ app.use(morgan("dev"));
 
   if (supabaseInfo.isConfigured) {
     console.log('[Supabase] ✓ Configured - File uploads enabled');
+    initializeSupabaseBuckets().catch(err => console.error('[Supabase] Bucket init error:', err));
   } else {
     console.log('[Supabase] ⚠ Not configured - File uploads will not work');
     console.log('[Supabase] Add SUPABASE_URL and SUPABASE_SERVICE_ROLE_KEY to .env');
@@ -199,6 +203,9 @@ app.use("/api/residents/group-chats", groupChatRoutes);
 app.use("/api/contracts", contractRoutes);
 app.use("/api", supportRoutes);
 app.use("/api", disputeRoutes);
+app.use("/api/progress", progressRoutes);
+app.use("/api/documents", documentRoutes);
+app.use("/api/financial", financialRoutes);
 
 // ============================================
 // HEALTH CHECK

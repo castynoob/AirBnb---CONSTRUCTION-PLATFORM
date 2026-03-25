@@ -18,7 +18,12 @@ import {
   deleteManagerProfilePicture,
   deleteEntrepreneurProfilePicture,
   updateEntrepreneurProfile,
-  updateUserPhone
+  updateUserPhone,
+  getEmailNotificationPreference,
+  updateEmailNotificationPreference,
+  uploadInsuranceProof,
+  addPortfolioPhoto,
+  removePortfolioPhoto
 } from "../controllers/userController.js";
 import { uploadImage, handleUploadError } from "../middleware/uploadMiddleware.js";
 import { authorizeRoles } from "../middleware/roleMiddleware.js";
@@ -156,6 +161,37 @@ router.put(
   updateEntrepreneurProfile
 );
 
+// Upload Insurance Proof
+router.post(
+  "/entrepreneur-profile/insurance-proof",
+  authenticateToken,
+  authorizeRoles("entrepreneur"),
+  uploadImage,
+  handleUploadError,
+  invalidateCache((req) => [USER_KEYS.profile(req.user.id), USER_KEYS.entrepreneur(req.user.id)]),
+  uploadInsuranceProof
+);
+
+// Add Portfolio Photo
+router.post(
+  "/entrepreneur-profile/portfolio",
+  authenticateToken,
+  authorizeRoles("entrepreneur"),
+  uploadImage,
+  handleUploadError,
+  invalidateCache((req) => [USER_KEYS.profile(req.user.id), USER_KEYS.entrepreneur(req.user.id)]),
+  addPortfolioPhoto
+);
+
+// Remove Portfolio Photo
+router.delete(
+  "/entrepreneur-profile/portfolio/:photoIndex",
+  authenticateToken,
+  authorizeRoles("entrepreneur"),
+  invalidateCache((req) => [USER_KEYS.profile(req.user.id), USER_KEYS.entrepreneur(req.user.id)]),
+  removePortfolioPhoto
+);
+
 // Update User Phone Number
 router.put(
   "/phone",
@@ -163,5 +199,9 @@ router.put(
   invalidateCache((req) => [USER_KEYS.profile(req.user.id), USER_KEYS.entrepreneur(req.user.id)]),
   updateUserPhone
 );
+
+// Email notification preference
+router.get("/email-notifications", authenticateToken, getEmailNotificationPreference);
+router.put("/email-notifications", authenticateToken, updateEmailNotificationPreference);
 
 export default router;
