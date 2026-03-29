@@ -49,7 +49,7 @@ router.put(
   "/:id",
   verifyToken,
   authorizeRoles("property_manager", "entrepreneur"),
-  invalidateCache((req) => [JOB_KEYS.forJob(req.params.id), JOB_KEYS.allJobs()]),
+  invalidateCache((req) => [JOB_KEYS.forJob(req.params.id), JOB_KEYS.allJobs(), 'manager_submissions:*']),
   updateJob
 );
 

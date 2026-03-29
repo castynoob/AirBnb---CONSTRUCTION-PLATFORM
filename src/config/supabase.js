@@ -200,7 +200,7 @@ export const initializeSupabaseBuckets = async () => {
       name: BUCKETS.DOCUMENTS,
       public: true,
       fileSizeLimit: 10485760, // 10MB
-      allowedMimeTypes: ['application/pdf'],
+      allowedMimeTypes: null, // Allow all file types (PDF, Excel, Word, images, etc.)
     },
   ];
 
@@ -230,7 +230,17 @@ export const initializeSupabaseBuckets = async () => {
           console.log(`[Supabase] ✓ Created bucket: ${config.name}`);
         }
       } else {
-        console.log(`[Supabase] ✓ Bucket "${config.name}" already exists`);
+        // Update existing bucket settings
+        try {
+          await admin.storage.updateBucket(config.name, {
+            public: config.public,
+            fileSizeLimit: config.fileSizeLimit,
+            allowedMimeTypes: config.allowedMimeTypes,
+          });
+          console.log(`[Supabase] ✓ Bucket "${config.name}" updated`);
+        } catch (updateErr) {
+          console.log(`[Supabase] ✓ Bucket "${config.name}" exists (update skipped)`);
+        }
       }
     } catch (error) {
       console.error(`[Supabase] Error with bucket "${config.name}":`, error.message);

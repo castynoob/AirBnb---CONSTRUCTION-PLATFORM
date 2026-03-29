@@ -322,6 +322,17 @@ const PaymentController = {
                         console.log(`⚠️ Customer ${user.stripe_customer_id} was deleted, creating new one`);
                         customer = null;
                         needsCustomerUpdate = true;
+                    } else if (payment_method_id) {
+                        // Attach the new payment method to the existing customer
+                        try {
+                            await stripe.paymentMethods.attach(payment_method_id, { customer: customer.id });
+                            await stripe.customers.update(customer.id, {
+                                invoice_settings: { default_payment_method: payment_method_id }
+                            });
+                            console.log(`✅ Attached payment method ${payment_method_id} to customer ${customer.id}`);
+                        } catch (attachErr) {
+                            console.log(`⚠️ Payment method attach warning: ${attachErr.message}`);
+                        }
                     }
                 } catch (err) {
                     // Customer doesn't exist in current Stripe mode (test vs live)

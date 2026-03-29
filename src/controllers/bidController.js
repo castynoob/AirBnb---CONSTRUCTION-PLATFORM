@@ -232,6 +232,7 @@ export const getManagerSubmissions = async (req, res) => {
     const managerId = managerResult.rows[0].id;
 
     // Build WHERE clause for optional status filter
+    const managerUserId = req.user.id;
     const conditions = [`j.manager_id = $1`, `b.status != 'declined'`, `(j.is_archived = false OR j.is_archived IS NULL)`];
     const params = [managerId];
     let paramIndex = 2;
@@ -279,9 +280,17 @@ export const getManagerSubmissions = async (req, res) => {
         p.city AS property_city,
         p.province AS property_province,
 
-        -- Review (latest for the job, if completed)
+        -- My review (PM's review of the entrepreneur)
         r.id AS review_id, r.rating AS review_rating,
         r.comment AS review_comment, r.review_created_at,
+        r.rating_quality AS review_rating_quality, r.rating_timeliness AS review_rating_timeliness,
+        r.rating_communication AS review_rating_communication, r.rating_value AS review_rating_value,
+
+        -- Review received (entrepreneur's review of the PM)
+        rr.id AS received_review_id, rr.rating AS received_review_rating,
+        rr.comment AS received_review_comment, rr.received_review_created_at,
+        rr.rating_quality AS received_review_rating_quality, rr.rating_timeliness AS received_review_rating_timeliness,
+        rr.rating_communication AS received_review_rating_communication, rr.rating_value AS received_review_rating_value,
 
         -- Contract (for the job, if exists)
         c.id AS contract_id, c.status AS contract_status,
@@ -295,12 +304,21 @@ export const getManagerSubmissions = async (req, res) => {
       JOIN users u ON ep.user_id = u.id
       LEFT JOIN properties p ON j.property_id = p.id
       LEFT JOIN LATERAL (
-        SELECT id, rating, comment, created_at AS review_created_at
+        SELECT id, rating, comment, created_at AS review_created_at,
+               rating_quality, rating_timeliness, rating_communication, rating_value
         FROM reviews
-        WHERE job_id = j.id
+        WHERE job_id = j.id AND reviewer_id = '${managerUserId.replace(/'/g, "''")}'::uuid
         ORDER BY created_at DESC
         LIMIT 1
       ) r ON true
+      LEFT JOIN LATERAL (
+        SELECT id, rating, comment, created_at AS received_review_created_at,
+               rating_quality, rating_timeliness, rating_communication, rating_value
+        FROM reviews
+        WHERE job_id = j.id AND reviewed_user_id = '${managerUserId.replace(/'/g, "''")}'::uuid
+        ORDER BY created_at DESC
+        LIMIT 1
+      ) rr ON true
       LEFT JOIN LATERAL (
         SELECT id, status, contract_amount, created_at AS contract_created_at,
                manager_completion_confirmed, contractor_completion_confirmed,
@@ -382,6 +400,20 @@ export const getManagerSubmissions = async (req, res) => {
         rating: row.review_rating,
         comment: row.review_comment,
         created_at: row.review_created_at,
+        rating_quality: row.review_rating_quality,
+        rating_timeliness: row.review_rating_timeliness,
+        rating_communication: row.review_rating_communication,
+        rating_value: row.review_rating_value,
+      } : null,
+      received_review: row.received_review_id ? {
+        id: row.received_review_id,
+        rating: row.received_review_rating,
+        comment: row.received_review_comment,
+        created_at: row.received_review_created_at,
+        rating_quality: row.received_review_rating_quality,
+        rating_timeliness: row.received_review_rating_timeliness,
+        rating_communication: row.received_review_rating_communication,
+        rating_value: row.received_review_rating_value,
       } : null,
       contract: row.contract_id ? {
         id: row.contract_id,

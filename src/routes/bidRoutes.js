@@ -5,7 +5,7 @@ import { authorizeRoles } from "../middleware/roleMiddleware.js";
 import { requireEntrepreneur } from "../middleware/roleMiddleware.js";
 import { requireSubscription, checkBidLimit } from "../middleware/subscriptionMiddleware.js";
 import { cacheMiddleware, invalidateCache } from "../middleware/cacheMiddleware.js";
-import { BID_KEYS, TTL } from "../utils/cacheKeys.js";
+import { BID_KEYS, JOB_KEYS, TTL } from "../utils/cacheKeys.js";
 import {
   submitBid,
   getBidsForJob,
@@ -87,21 +87,21 @@ router.get(
   getBidsForJob
 );
 
-// Approve bid - Invalidate bid caches
+// Approve bid - Invalidate bid + submission caches
 router.patch(
   "/:id/approve",
   verifyToken,
   authorizeRoles("property_manager"),
-  invalidateCache(() => [BID_KEYS.allBids()]),
+  invalidateCache(() => [BID_KEYS.allBids(), 'manager_submissions:*', JOB_KEYS.allJobs()]),
   approveBid
 );
 
-// Decline bid - Invalidate bid caches
+// Decline bid - Invalidate bid + submission caches
 router.patch(
   "/:id/decline",
   verifyToken,
   authorizeRoles("property_manager"),
-  invalidateCache(() => [BID_KEYS.allBids()]),
+  invalidateCache(() => [BID_KEYS.allBids(), 'manager_submissions:*']),
   declineBid
 );
 
@@ -110,7 +110,7 @@ router.patch(
   "/:id/cancel-approval",
   verifyToken,
   authorizeRoles("property_manager"),
-  invalidateCache(() => [BID_KEYS.allBids()]),
+  invalidateCache(() => [BID_KEYS.allBids(), 'manager_submissions:*', JOB_KEYS.allJobs()]),
   cancelBidApproval
 );
 
