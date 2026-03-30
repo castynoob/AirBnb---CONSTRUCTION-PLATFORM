@@ -120,7 +120,7 @@ export const adminLogin = async (req, res) => {
       return res.status(401).json({ message: "Invalid credentials" });
     }
 
-    // Create access token (1 hour for adminss)
+    // Create access token (1 hour for adminsss)
     const accessToken = jwt.sign(
       { id: admin.id, email: admin.email, role: admin.role, isAdmin: true },
       process.env.JWT_SECRET,
