@@ -1,4 +1,11 @@
 // ============================================
+// FORCE UTC FOR ALL DATE/TIME OPERATIONS
+// All timestamps stored & emitted as UTC; frontend localizes for display.
+// Must run before any module that touches `Date` or `pg` is imported.
+// ============================================
+process.env.TZ = "UTC";
+
+// ============================================
 // LOAD ENVIRONMENT VARIABLES FIRST
 // ============================================
 import dotenv from "dotenv";

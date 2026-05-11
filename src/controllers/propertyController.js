@@ -27,11 +27,10 @@ export const createProperty = async (req, res) => {
       });
     }
 
-    // Validate num_units (must be between 0 and 100)
     const parsedNumUnits = parseInt(num_units) || 0;
-    if (parsedNumUnits < 0 || parsedNumUnits > 100) {
+    if (parsedNumUnits < 0) {
       return res.status(400).json({
-        message: "Number of units must be between 0 and 100"
+        message: "Number of units cannot be negative"
       });
     }
 
@@ -256,12 +255,11 @@ export const updateProperty = async (req, res) => {
     delete updateFields.manager_id;
     delete updateFields.created_at;
 
-    // Validate num_units if provided (must be between 0 and 100)
     if (updateFields.num_units !== undefined) {
       const parsedNumUnits = parseInt(updateFields.num_units) || 0;
-      if (parsedNumUnits < 0 || parsedNumUnits > 100) {
+      if (parsedNumUnits < 0) {
         return res.status(400).json({
-          message: "Number of units must be between 0 and 100"
+          message: "Number of units cannot be negative"
         });
       }
       updateFields.num_units = parsedNumUnits;

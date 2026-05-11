@@ -16,10 +16,10 @@ export const addReview = async (req, res) => {
     const reviewer_id = req.user.id;
     const files = req.files || [];
 
-    // Validate required fields
-    if (!reviewed_user_id || !job_id || !rating || !comment) {
+    // Validate required fields (comment is optional)
+    if (!reviewed_user_id || !job_id || !rating) {
       return res.status(400).json({
-        message: "Missing required fields: reviewed_user_id, job_id, rating, and comment are required"
+        message: "Missing required fields: reviewed_user_id, job_id, and rating are required"
       });
     }
 
@@ -96,8 +96,9 @@ export const addReview = async (req, res) => {
       return res.status(400).json({ message: "You have already reviewed this job" });
     }
 
-    // Create review with category ratings
-    const review = await createReview(reviewer_id, reviewed_user_id, job_id, rating, comment, categoryRatings);
+    // Create review with category ratings — normalize an empty/missing comment to null
+    const normalizedComment = (typeof comment === 'string' && comment.trim()) ? comment.trim() : null;
+    const review = await createReview(reviewer_id, reviewed_user_id, job_id, rating, normalizedComment, categoryRatings);
 
     // Upload images if any (with before/after type support)
     const uploadedImages = [];

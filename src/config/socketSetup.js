@@ -5,15 +5,10 @@
 import { Server } from 'socket.io';
 import jwt from 'jsonwebtoken';
 import messageModel from '../models/messageModel.js'; // ✅ your DB model
-import { sendMessageNotificationEmail } from '../config/emailConfig.js';
 import pool from '../config/db.js';
 import { createNotification } from '../controllers/notificationController.js';
 
 let io = null;
-
-// Track recent email notifications to avoid spam (conversationId -> timestamp)
-const recentEmailNotifications = new Map();
-const EMAIL_COOLDOWN_MS = 10 * 60 * 1000; // 10 minutes between emails per conversation
 
 /**
  * Initialize Socket.io server
@@ -206,7 +201,7 @@ const setupSocket = (server) => {
           },
         });
 
-        // Get sender and receiver details for email notification
+        // Get sender details for the in-app notification
         const senderResult = await pool.query(
           `SELECT u.first_name, u.last_name, u.role, ep.company_name
            FROM users u
@@ -214,21 +209,11 @@ const setupSocket = (server) => {
            WHERE u.id = $1`,
           [socket.userId]
         );
-        const receiverResult = await pool.query(
-          `SELECT u.email, u.first_name, u.last_name, u.email_notifications,
-                  uos.is_online
-           FROM users u
-           LEFT JOIN user_online_status uos ON u.id = uos.user_id
-           WHERE u.id = $1`,
-          [receiverId]
-        );
 
         const sender = senderResult.rows[0];
         const senderName = sender
           ? (sender.role === 'entrepreneur' && sender.company_name ? sender.company_name : `${sender.first_name} ${sender.last_name}`)
           : 'Someone';
-
-        const receiverData = receiverResult.rows[0];
 
         // 🔔 Notify receiver's personal room for notifications (if they're not in the conversation)
         io.to(receiverId.toString()).emit('message_notification', {
@@ -251,29 +236,6 @@ const setupSocket = (server) => {
           console.log(`💾 Message notification saved to database for user ${receiverId}`);
         } catch (notifError) {
           console.error('❌ Failed to save message notification:', notifError);
-        }
-
-        // 📧 Send email notification only if receiver is OFFLINE and has email_notifications enabled
-        if (receiverData && !receiverData.is_online && receiverData.email_notifications !== false) {
-          const emailKey = `${receiverId}_${actualConversationId}`;
-          const lastSent = recentEmailNotifications.get(emailKey);
-          const now = Date.now();
-
-          if (!lastSent || (now - lastSent) > EMAIL_COOLDOWN_MS) {
-            recentEmailNotifications.set(emailKey, now);
-            const messagePreview = content.substring(0, 100) + (content.length > 100 ? '...' : '');
-            sendMessageNotificationEmail(
-              receiverData.email,
-              receiverData.first_name,
-              senderName,
-              messagePreview
-            ).catch(err => {
-              console.error('❌ Failed to send email notification:', err);
-            });
-            console.log(`📧 Email notification sent to offline user ${receiverId}`);
-          } else {
-            console.log(`📧 Email skipped for ${receiverId} (cooldown: ${Math.round((EMAIL_COOLDOWN_MS - (now - lastSent)) / 1000)}s remaining)`);
-          }
         }
 
         console.log(`✅ Message delivery complete`);

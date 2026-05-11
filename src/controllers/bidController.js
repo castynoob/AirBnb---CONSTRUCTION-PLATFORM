@@ -296,7 +296,13 @@ export const getManagerSubmissions = async (req, res) => {
         c.id AS contract_id, c.status AS contract_status,
         c.contract_amount, c.contract_created_at,
         c.manager_completion_confirmed, c.contractor_completion_confirmed,
-        c.mutual_confirmation_completed_at
+        c.mutual_confirmation_completed_at,
+        c.manager_confirmed_at, c.contractor_confirmed_at,
+        c.manager_completion_note, c.contractor_completion_note,
+        -- Invoice (filled by contractor before completion)
+        c.invoice_submitted_at, c.invoice_subtotal, c.invoice_gst,
+        c.invoice_qst, c.invoice_total, c.invoice_notes,
+        c.invoice_document_id, c.invoice_file_url, c.invoice_file_name
 
       FROM bids b
       JOIN jobs j ON b.job_id = j.id
@@ -320,12 +326,20 @@ export const getManagerSubmissions = async (req, res) => {
         LIMIT 1
       ) rr ON true
       LEFT JOIN LATERAL (
-        SELECT id, status, contract_amount, created_at AS contract_created_at,
-               manager_completion_confirmed, contractor_completion_confirmed,
-               mutual_confirmation_completed_at
+        SELECT contracts.id, contracts.status, contracts.contract_amount,
+               contracts.created_at AS contract_created_at,
+               contracts.manager_completion_confirmed, contracts.contractor_completion_confirmed,
+               contracts.mutual_confirmation_completed_at,
+               contracts.manager_confirmed_at, contracts.contractor_confirmed_at,
+               contracts.manager_completion_note, contracts.contractor_completion_note,
+               contracts.invoice_submitted_at, contracts.invoice_subtotal,
+               contracts.invoice_gst, contracts.invoice_qst, contracts.invoice_total,
+               contracts.invoice_notes, contracts.invoice_document_id,
+               d.file_url AS invoice_file_url, d.file_name AS invoice_file_name
         FROM contracts
-        WHERE job_id = j.id
-        ORDER BY created_at DESC
+        LEFT JOIN documents d ON contracts.invoice_document_id = d.id
+        WHERE contracts.job_id = j.id
+        ORDER BY contracts.created_at DESC
         LIMIT 1
       ) c ON true
       WHERE ${conditions.join(' AND ')}
@@ -423,6 +437,20 @@ export const getManagerSubmissions = async (req, res) => {
         manager_completion_confirmed: row.manager_completion_confirmed,
         contractor_completion_confirmed: row.contractor_completion_confirmed,
         mutual_confirmation_completed_at: row.mutual_confirmation_completed_at,
+        manager_confirmed_at: row.manager_confirmed_at,
+        contractor_confirmed_at: row.contractor_confirmed_at,
+        manager_completion_note: row.manager_completion_note,
+        contractor_completion_note: row.contractor_completion_note,
+        // Invoice (null until contractor submits)
+        invoice_submitted_at: row.invoice_submitted_at,
+        invoice_subtotal: row.invoice_subtotal != null ? parseFloat(row.invoice_subtotal) : null,
+        invoice_gst:      row.invoice_gst      != null ? parseFloat(row.invoice_gst)      : null,
+        invoice_qst:      row.invoice_qst      != null ? parseFloat(row.invoice_qst)      : null,
+        invoice_total:    row.invoice_total    != null ? parseFloat(row.invoice_total)    : null,
+        invoice_notes:    row.invoice_notes,
+        invoice_document_id: row.invoice_document_id,
+        invoice_file_url:    row.invoice_file_url,
+        invoice_file_name:   row.invoice_file_name,
       } : null,
     }));
 

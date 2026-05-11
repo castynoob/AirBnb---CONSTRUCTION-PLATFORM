@@ -15,8 +15,8 @@ const pool = new Pool({
 
 pool.on("connect", async (client) => {
   console.log("✅ Connected to PostgreSQL database");
-  // Set timezone for consistent timestamp handling (Eastern Time - Toronto)
-  await client.query("SET timezone = 'America/Toronto'");
+  // Store all timestamps in UTC. Frontend localizes for display.
+  await client.query("SET timezone = 'UTC'");
 });
 
 pool.on("error", (err) => {

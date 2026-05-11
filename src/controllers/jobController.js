@@ -84,10 +84,24 @@ export const getJobById = async (req, res) => {
 };
 
 // 🟣 Update job
+const EDITABLE_JOB_FIELDS = new Set([
+  "title", "description", "category", "urgency",
+  "due_date", "estimated_duration_days",
+  "budget_min", "budget_max", "is_budget_hidden", "is_emergency",
+  "status", "location", "severity", "priority",
+  "deadline", "bid_deadline", "entrepreneur_id",
+]);
+
 export const updateJob = async (req, res) => {
   try {
     const jobId = req.params.id;
-    const updateFields = req.body;
+    const updateFields = Object.fromEntries(
+      Object.entries(req.body || {}).filter(([k]) => EDITABLE_JOB_FIELDS.has(k))
+    );
+
+    if (Object.keys(updateFields).length === 0) {
+      return res.status(400).json({ message: "No editable fields supplied" });
+    }
 
     // Get current job status before update to detect status changes
     const currentJob = await Job.getJobById(jobId);

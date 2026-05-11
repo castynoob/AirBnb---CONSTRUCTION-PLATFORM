@@ -158,6 +158,104 @@ const ContractController = {
   },
 
   /**
+   * SUBMIT INVOICE
+   * Entrepreneur submits the final invoice (totals + uploaded document) before
+   * marking work complete. Idempotent: can re-submit while work_completed_at is null.
+   * POST /api/contracts/:id/invoice
+   * Body: { subtotal, gst, qst, total, document_id, notes? }
+   */
+  async submitInvoice(req, res) {
+    try {
+      const { id } = req.params;
+      const user_id = req.user.id;
+      const { subtotal, gst, qst, total, document_id, notes } = req.body;
+
+      // Validate numeric inputs
+      const num = (v) => (v === '' || v == null ? NaN : Number(v));
+      const sub = num(subtotal), g = num(gst), q = num(qst), tot = num(total);
+      if ([sub, g, q, tot].some((n) => Number.isNaN(n) || n < 0)) {
+        return res.status(400).json({ error: 'Invalid amounts. Subtotal, GST, QST and total are required and must be non-negative numbers.' });
+      }
+      // Sanity check: total should equal subtotal + gst + qst within 1 cent
+      if (Math.abs((sub + g + q) - tot) > 0.01) {
+        return res.status(400).json({ error: 'Total does not match subtotal + GST + QST.' });
+      }
+      if (!document_id) {
+        return res.status(400).json({ error: 'Invoice attachment is required (document_id).' });
+      }
+
+      // Load contract + verify entrepreneur owns it
+      const contractResult = await pool.query(
+        `SELECT c.*, ep.user_id as entrepreneur_user_id
+           FROM contracts c
+           JOIN entrepreneur_profiles ep ON c.entrepreneur_id = ep.id
+          WHERE c.id = $1`,
+        [id]
+      );
+      if (contractResult.rows.length === 0) {
+        return res.status(404).json({ error: 'Contract not found' });
+      }
+      const contract = contractResult.rows[0];
+      if (contract.entrepreneur_user_id !== user_id) {
+        return res.status(403).json({ error: 'Only the contractor on this contract can submit the invoice.' });
+      }
+      if (contract.work_completed_at) {
+        return res.status(400).json({ error: 'Work is already marked complete; the invoice is locked.' });
+      }
+
+      // Verify the supplied document belongs to this user and (optionally) this contract
+      const docResult = await pool.query(
+        `SELECT id, owner_id, contract_id FROM documents WHERE id = $1`,
+        [document_id]
+      );
+      if (docResult.rows.length === 0) {
+        return res.status(400).json({ error: 'Invoice document not found.' });
+      }
+      const doc = docResult.rows[0];
+      if (doc.owner_id !== user_id) {
+        return res.status(403).json({ error: 'You can only attach a document you uploaded.' });
+      }
+      // If the document was uploaded with a contract_id, it must match.
+      if (doc.contract_id && doc.contract_id !== id) {
+        return res.status(400).json({ error: 'Invoice document is linked to a different contract.' });
+      }
+
+      const isResubmission = !!contract.invoice_submitted_at;
+
+      await pool.query(
+        `UPDATE contracts
+            SET invoice_subtotal     = $1,
+                invoice_gst          = $2,
+                invoice_qst          = $3,
+                invoice_total        = $4,
+                invoice_document_id  = $5,
+                invoice_notes        = $6,
+                invoice_submitted_at = COALESCE(invoice_submitted_at, NOW()),
+                updated_at           = NOW()
+          WHERE id = $7`,
+        [sub.toFixed(2), g.toFixed(2), q.toFixed(2), tot.toFixed(2), document_id, notes || null, id]
+      );
+
+      await pool.query(
+        `INSERT INTO contract_events (contract_id, event_type, actor_user_id, actor_role, event_data)
+         VALUES ($1, $2, $3, 'entrepreneur', $4::jsonb)`,
+        [id, isResubmission ? 'invoice_resubmitted' : 'invoice_submitted', user_id, JSON.stringify({ subtotal: sub, gst: g, qst: q, total: tot })]
+      );
+
+      console.log(`✅ Invoice ${isResubmission ? 're-' : ''}submitted for contract ${id} (total $${tot.toFixed(2)})`);
+
+      res.json({
+        success: true,
+        message: isResubmission ? 'Invoice updated.' : 'Invoice submitted. You can now mark the work as complete.',
+        contract_id: id,
+      });
+    } catch (error) {
+      console.error('❌ Submit invoice error:', error);
+      res.status(500).json({ error: 'Failed to submit invoice', message: error.message });
+    }
+  },
+
+  /**
    * MARK WORK COMPLETE
    * Entrepreneur marks work as complete
    * POST /api/contracts/:id/complete
@@ -192,6 +290,14 @@ const ContractController = {
         return res.status(400).json({
           error: 'Contract must be active before marking complete',
           current_status: contract.status
+        });
+      }
+
+      // Gate: invoice must be submitted before completion
+      if (!contract.invoice_submitted_at) {
+        return res.status(400).json({
+          error: 'invoice_required',
+          message: 'Submit your final invoice (with totals and attachment) before marking the work complete.'
         });
       }
 
@@ -504,10 +610,17 @@ const ContractController = {
       const user_id = req.user.id;
 
       const result = await pool.query(
-        `SELECT c.*, mp.user_id as manager_user_id, ep.user_id as entrepreneur_user_id
+        `SELECT c.*,
+                mp.user_id as manager_user_id,
+                ep.user_id as entrepreneur_user_id,
+                d.file_url     as invoice_file_url,
+                d.file_name    as invoice_file_name,
+                d.file_size    as invoice_file_size,
+                d.file_type    as invoice_file_type
          FROM contracts c
          JOIN manager_profiles mp ON c.manager_id = mp.id
          JOIN entrepreneur_profiles ep ON c.entrepreneur_id = ep.id
+         LEFT JOIN documents d ON c.invoice_document_id = d.id
          WHERE c.job_id = $1
            AND (mp.user_id = $2 OR ep.user_id = $2)`,
         [job_id, user_id]
@@ -530,9 +643,23 @@ const ContractController = {
           is_manager: contract.manager_user_id === user_id,
           contractor_completion_confirmed: contract.contractor_completion_confirmed,
           contractor_confirmed_at: contract.contractor_confirmed_at,
+          contractor_completion_note: contract.contractor_completion_note,
           manager_completion_confirmed: contract.manager_completion_confirmed,
           manager_confirmed_at: contract.manager_confirmed_at,
-          mutual_confirmation_completed_at: contract.mutual_confirmation_completed_at
+          manager_completion_note: contract.manager_completion_note,
+          mutual_confirmation_completed_at: contract.mutual_confirmation_completed_at,
+          // Invoice (null until contractor submits)
+          invoice_submitted_at: contract.invoice_submitted_at,
+          invoice_subtotal: contract.invoice_subtotal != null ? parseFloat(contract.invoice_subtotal) : null,
+          invoice_gst:      contract.invoice_gst      != null ? parseFloat(contract.invoice_gst)      : null,
+          invoice_qst:      contract.invoice_qst      != null ? parseFloat(contract.invoice_qst)      : null,
+          invoice_total:    contract.invoice_total    != null ? parseFloat(contract.invoice_total)    : null,
+          invoice_notes:    contract.invoice_notes,
+          invoice_document_id: contract.invoice_document_id,
+          invoice_file_url:    contract.invoice_file_url,
+          invoice_file_name:   contract.invoice_file_name,
+          invoice_file_size:   contract.invoice_file_size,
+          invoice_file_type:   contract.invoice_file_type
         }
       });
 
@@ -551,6 +678,8 @@ const ContractController = {
     try {
       const { id } = req.params;
       const user_id = req.user.id;
+      const rawNote = req.body?.note;
+      const note = typeof rawNote === 'string' ? rawNote.trim() : '';
 
       // Get contract with both user IDs and names
       const contractResult = await pool.query(
@@ -584,6 +713,14 @@ const ContractController = {
         return res.status(403).json({ error: 'You are not part of this contract' });
       }
 
+      // Manager note is mandatory; we record what they observed/agreed when confirming.
+      if (isManager && note.length === 0) {
+        return res.status(400).json({
+          error: 'note_required',
+          message: 'A completion note is required when confirming work completion.',
+        });
+      }
+
       // Contract must be completed or work must be marked complete
       // (entrepreneur marks work complete → job status = completed, but contract status may still be active)
       if (contract.status !== 'completed' && contract.status !== 'active' && contract.status !== 'in_progress') {
@@ -612,28 +749,35 @@ const ContractController = {
       const role = isManager ? 'manager' : 'entrepreneur';
 
       if (isManager) {
-        // PM confirmation auto-confirms BOTH parties
+        // PM confirmation auto-confirms BOTH parties; persist the manager's note.
         await pool.query(
           `UPDATE contracts SET
             manager_completion_confirmed = true, manager_confirmed_at = NOW(),
             contractor_completion_confirmed = true, contractor_confirmed_at = COALESCE(contractor_confirmed_at, NOW()),
+            manager_completion_note = $2,
             updated_at = NOW()
            WHERE id = $1`,
-          [id]
+          [id, note]
         );
       } else {
-        // Entrepreneur can still confirm on their side (mark complete triggers this)
+        // Entrepreneur can still confirm on their side (mark complete triggers this).
+        // Note is optional here; persist only if provided.
         await pool.query(
-          `UPDATE contracts SET contractor_completion_confirmed = true, contractor_confirmed_at = NOW(), updated_at = NOW() WHERE id = $1`,
-          [id]
+          `UPDATE contracts SET
+            contractor_completion_confirmed = true,
+            contractor_confirmed_at = NOW(),
+            contractor_completion_note = COALESCE(NULLIF($2, ''), contractor_completion_note),
+            updated_at = NOW()
+           WHERE id = $1`,
+          [id, note]
         );
       }
 
-      // Log event
+      // Log event (include the note in event_data for the audit trail)
       await pool.query(
-        `INSERT INTO contract_events (contract_id, event_type, actor_user_id, actor_role)
-         VALUES ($1, 'completion_confirmed', $2, $3)`,
-        [id, user_id, role]
+        `INSERT INTO contract_events (contract_id, event_type, actor_user_id, actor_role, event_data)
+         VALUES ($1, 'completion_confirmed', $2, $3, $4::jsonb)`,
+        [id, user_id, role, JSON.stringify({ note: note || null })]
       );
 
       // Re-fetch to check if both confirmed

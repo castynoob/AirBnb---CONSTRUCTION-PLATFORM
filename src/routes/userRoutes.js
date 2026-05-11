@@ -18,6 +18,7 @@ import {
   deleteManagerProfilePicture,
   deleteEntrepreneurProfilePicture,
   updateEntrepreneurProfile,
+  updateManagerProfile,
   updateUserPhone,
   getEmailNotificationPreference,
   updateEmailNotificationPreference,
@@ -159,6 +160,15 @@ router.put(
   authorizeRoles("entrepreneur"),
   invalidateCache((req) => [USER_KEYS.profile(req.user.id), USER_KEYS.entrepreneur(req.user.id)]),
   updateEntrepreneurProfile
+);
+
+// Update Manager Profile (personal + business info)
+router.put(
+  "/manager/profile",
+  authenticateToken,
+  authorizeRoles("property_manager"),
+  invalidateCache((req) => [USER_KEYS.profile(req.user.id), USER_KEYS.manager(req.user.id)]),
+  updateManagerProfile
 );
 
 // Upload Insurance Proof

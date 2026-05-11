@@ -61,8 +61,21 @@ router.post(
 );
 
 /**
+ * @route   POST /api/contracts/:id/invoice
+ * @desc    Submit/replace the final invoice (totals + uploaded document) before
+ *          marking work complete. Idempotent until work_completed_at is set.
+ * @access  Entrepreneur only
+ */
+router.post(
+  '/:id/invoice',
+  authenticateToken,
+  requireEntrepreneur,
+  ContractController.submitInvoice
+);
+
+/**
  * @route   POST /api/contracts/:id/complete
- * @desc    Mark work as complete (triggers manager review)
+ * @desc    Mark work as complete (requires invoice submitted; triggers manager review)
  * @access  Entrepreneur only
  */
 router.post(

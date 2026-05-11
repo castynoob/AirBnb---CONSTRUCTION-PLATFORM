@@ -665,6 +665,88 @@ export const updateEntrepreneurProfile = async (req, res) => {
 };
 
 /**
+ * Update Manager Profile
+ * PUT /api/users/manager/profile
+ *
+ * Updates personal info (users: first_name, last_name, phone) and business info
+ * (manager_profiles: company_name, address). Email changes are intentionally not
+ * supported here — they go through the email-change verification flow.
+ */
+export const updateManagerProfile = async (req, res) => {
+  const client = await pool.connect();
+  try {
+    const userId = req.user.id;
+    const {
+      first_name,
+      last_name,
+      phone,
+      company_name,
+      address,
+    } = req.body;
+
+    if (first_name !== undefined && !String(first_name).trim()) {
+      return res.status(400).json({ message: 'First name cannot be empty' });
+    }
+    if (last_name !== undefined && !String(last_name).trim()) {
+      return res.status(400).json({ message: 'Last name cannot be empty' });
+    }
+
+    await client.query('BEGIN');
+
+    const userUpdates = [];
+    const userValues = [];
+    if (first_name !== undefined) { userUpdates.push(`first_name = $${userUpdates.length + 1}`); userValues.push(String(first_name).trim()); }
+    if (last_name !== undefined)  { userUpdates.push(`last_name = $${userUpdates.length + 1}`);  userValues.push(String(last_name).trim()); }
+    if (phone !== undefined)      { userUpdates.push(`phone = $${userUpdates.length + 1}`);      userValues.push(phone ? String(phone).trim() : null); }
+
+    if (userUpdates.length > 0) {
+      userValues.push(userId);
+      await client.query(
+        `UPDATE users SET ${userUpdates.join(', ')}, updated_at = NOW() WHERE id = $${userValues.length}`,
+        userValues
+      );
+    }
+
+    const profileUpdates = [];
+    const profileValues = [];
+    if (company_name !== undefined) { profileUpdates.push(`company_name = $${profileUpdates.length + 1}`); profileValues.push(company_name ? String(company_name).trim() : null); }
+    if (address !== undefined)      { profileUpdates.push(`address = $${profileUpdates.length + 1}`);      profileValues.push(address ? String(address).trim() : null); }
+
+    if (profileUpdates.length > 0) {
+      profileValues.push(userId);
+      await client.query(
+        `UPDATE manager_profiles SET ${profileUpdates.join(', ')}, updated_at = NOW() WHERE user_id = $${profileValues.length}`,
+        profileValues
+      );
+    }
+
+    await client.query('COMMIT');
+
+    const merged = await client.query(
+      `SELECT u.id AS user_id, u.first_name, u.last_name, u.email, u.phone,
+              mp.id AS profile_id, mp.company_name, mp.address, mp.image,
+              mp.created_at, mp.updated_at
+         FROM users u
+         LEFT JOIN manager_profiles mp ON mp.user_id = u.id
+        WHERE u.id = $1`,
+      [userId]
+    );
+
+    console.log(`[Update] ✓ Manager profile updated: ${userId}`);
+    res.status(200).json({
+      message: 'Profile updated successfully',
+      profile: merged.rows[0]
+    });
+  } catch (error) {
+    await client.query('ROLLBACK').catch(() => {});
+    console.error('[Update] Manager profile error:', error);
+    res.status(500).json({ message: 'Server error', error: error.message });
+  } finally {
+    client.release();
+  }
+};
+
+/**
  * Upload Insurance Proof
  * POST /api/users/entrepreneur-profile/insurance-proof
  *

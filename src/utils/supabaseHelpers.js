@@ -82,6 +82,21 @@ export const uploadToSupabase = async ({
       },
     };
   } catch (error) {
+    // Network-level failures (DNS, TCP, TLS, blocked egress) come up as "fetch failed" with
+    // an underlying cause from undici. Surface a clearer message so the UI/operator knows
+    // it's a connectivity issue, not a bad upload payload.
+    const isFetchFailure = error?.message === 'fetch failed' || error?.cause;
+    if (isFetchFailure) {
+      console.error(`[Supabase] Upload network error:`, {
+        message: error.message,
+        causeCode: error?.cause?.code,
+        causeMessage: error?.cause?.message,
+      });
+      return {
+        success: false,
+        error: `Cannot reach Supabase Storage (${error?.cause?.code || 'network error'}). Verify SUPABASE_URL, network egress, and that the project is not paused.`,
+      };
+    }
     console.error(`[Supabase] Upload exception:`, error.message);
     return {
       success: false,

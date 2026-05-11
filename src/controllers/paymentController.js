@@ -37,12 +37,17 @@ const PLANS = {
     }
 };
 
-// Tax configuration
-const TAX_RATE = 0.05; // 5% GST/HST
-const TAX_LABEL = 'GST/HST';
+// Tax configuration — Quebec (GST + QST). Both apply on the pre-tax amount; QST is no longer
+// compounded on GST as of 2013, so the effective combined rate is 5% + 9.975% = 14.975%.
+const GST_RATE = 0.05;        // TPS
+const QST_RATE = 0.09975;     // TVQ
+const TAX_RATE = GST_RATE + QST_RATE; // 0.14975 — kept for legacy * (1 + TAX_RATE) call sites
+const TAX_LABEL = 'GST + QST';
 const BUDGET_UNLOCK_BASE_AMOUNT = 1999; // $19.99 in cents
-const BUDGET_UNLOCK_TAX = Math.round(BUDGET_UNLOCK_BASE_AMOUNT * TAX_RATE); // 100 cents = $1.00
-const BUDGET_UNLOCK_TOTAL = BUDGET_UNLOCK_BASE_AMOUNT + BUDGET_UNLOCK_TAX; // 2099 cents = $20.99
+const BUDGET_UNLOCK_GST = Math.round(BUDGET_UNLOCK_BASE_AMOUNT * GST_RATE); // 100 cents
+const BUDGET_UNLOCK_QST = Math.round(BUDGET_UNLOCK_BASE_AMOUNT * QST_RATE); // 199 cents
+const BUDGET_UNLOCK_TAX = BUDGET_UNLOCK_GST + BUDGET_UNLOCK_QST;            // 299 cents
+const BUDGET_UNLOCK_TOTAL = BUDGET_UNLOCK_BASE_AMOUNT + BUDGET_UNLOCK_TAX;  // 2298 cents = $22.98
 
 // Log which price IDs are being used
 console.log(`📋 Using Price IDs (${stripeConfig.mode} mode):`, {
@@ -590,8 +595,12 @@ const PaymentController = {
                     current_period_end: subscription.current_period_end,
                     is_trial: subscription.status === 'trialing',
                     price: `$${PLANS[plan_type].price}/month`,
+                    gst_rate: GST_RATE,
+                    qst_rate: QST_RATE,
                     tax_rate: TAX_RATE,
                     tax_label: TAX_LABEL,
+                    gst_amount: parseFloat((PLANS[plan_type].price * GST_RATE).toFixed(2)),
+                    qst_amount: parseFloat((PLANS[plan_type].price * QST_RATE).toFixed(2)),
                     tax_amount: parseFloat((PLANS[plan_type].price * TAX_RATE).toFixed(2)),
                     total_with_tax: parseFloat((PLANS[plan_type].price * (1 + TAX_RATE)).toFixed(2))
                 }
@@ -900,8 +909,11 @@ const PaymentController = {
                     job_id: job_id,
                     job_title: jobQuery.rows[0].title,
                     subtotal: BUDGET_UNLOCK_BASE_AMOUNT,
+                    gst_amount: BUDGET_UNLOCK_GST,
+                    qst_amount: BUDGET_UNLOCK_QST,
                     tax_amount: BUDGET_UNLOCK_TAX,
-                    tax_rate: `${TAX_RATE * 100}%`,
+                    gst_rate: `${(GST_RATE * 100).toFixed(3)}%`,
+                    qst_rate: `${(QST_RATE * 100).toFixed(3)}%`,
                     tax_label: TAX_LABEL
                 }
             });
@@ -933,6 +945,8 @@ const PaymentController = {
                 message: 'Budget unlocked successfully!',
                 payment_intent_id: paymentIntent.id,
                 subtotal: `$${(BUDGET_UNLOCK_BASE_AMOUNT / 100).toFixed(2)}`,
+                gst_amount: `$${(BUDGET_UNLOCK_GST / 100).toFixed(2)}`,
+                qst_amount: `$${(BUDGET_UNLOCK_QST / 100).toFixed(2)}`,
                 tax_amount: `$${(BUDGET_UNLOCK_TAX / 100).toFixed(2)}`,
                 tax_label: TAX_LABEL,
                 amount_paid: `$${(BUDGET_UNLOCK_TOTAL / 100).toFixed(2)}`
@@ -1497,32 +1511,33 @@ const PaymentController = {
      */
     async getTaxConfig(req, res) {
         try {
+            const planSummary = (price) => ({
+                subtotal: price,
+                gst: parseFloat((price * GST_RATE).toFixed(2)),
+                qst: parseFloat((price * QST_RATE).toFixed(2)),
+                tax: parseFloat((price * TAX_RATE).toFixed(2)),
+                total: parseFloat((price * (1 + TAX_RATE)).toFixed(2)),
+            });
             res.json({
+                gst_rate: GST_RATE,
+                qst_rate: QST_RATE,
                 tax_rate: TAX_RATE,
+                gst_percentage: GST_RATE * 100,
+                qst_percentage: QST_RATE * 100,
                 tax_percentage: TAX_RATE * 100,
                 tax_label: TAX_LABEL,
                 tax_inclusive: false,
                 budget_unlock: {
                     subtotal: BUDGET_UNLOCK_BASE_AMOUNT / 100,
+                    gst: BUDGET_UNLOCK_GST / 100,
+                    qst: BUDGET_UNLOCK_QST / 100,
                     tax: BUDGET_UNLOCK_TAX / 100,
                     total: BUDGET_UNLOCK_TOTAL / 100,
                 },
                 plans: {
-                    starter: {
-                        subtotal: PLANS.starter.price,
-                        tax: parseFloat((PLANS.starter.price * TAX_RATE).toFixed(2)),
-                        total: parseFloat((PLANS.starter.price * (1 + TAX_RATE)).toFixed(2)),
-                    },
-                    basic: {
-                        subtotal: PLANS.basic.price,
-                        tax: parseFloat((PLANS.basic.price * TAX_RATE).toFixed(2)),
-                        total: parseFloat((PLANS.basic.price * (1 + TAX_RATE)).toFixed(2)),
-                    },
-                    premium: {
-                        subtotal: PLANS.premium.price,
-                        tax: parseFloat((PLANS.premium.price * TAX_RATE).toFixed(2)),
-                        total: parseFloat((PLANS.premium.price * (1 + TAX_RATE)).toFixed(2)),
-                    },
+                    starter: planSummary(PLANS.starter.price),
+                    basic: planSummary(PLANS.basic.price),
+                    premium: planSummary(PLANS.premium.price),
                 }
             });
         } catch (error) {
