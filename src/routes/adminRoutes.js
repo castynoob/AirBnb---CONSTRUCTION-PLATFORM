@@ -66,6 +66,53 @@ import {
   escalateDisputeHandler,
 } from "../controllers/adminController.js";
 import {
+  listManagers,
+  adminCreateProperty,
+  adminUpdateProperty,
+  adminDeleteProperty,
+  adminCreateJob,
+  adminUpdateJob,
+  adminDeleteJob,
+} from "../controllers/adminPropertyJobController.js";
+import {
+  listMyProperties,
+  listMyJobs,
+} from "../controllers/adminOwnedController.js";
+import {
+  listAdmins,
+  createAdmin,
+  updateAdmin,
+  deleteAdmin,
+} from "../controllers/adminUserController.js";
+import {
+  adminParseInspection,
+  adminCreateJobsFromInspection,
+} from "../controllers/adminInspectionController.js";
+import {
+  getAdminNotifications,
+  getAdminUnreadCount,
+  markAdminNotificationAsRead,
+  markAllAdminNotificationsAsRead,
+  markJobNotificationsAsRead,
+  deleteAdminNotification,
+  clearAdminNotifications,
+} from "../controllers/adminNotificationController.js";
+import {
+  listBidsOnMyJob,
+  approveBidAsAdmin,
+  declineBidAsAdmin,
+  cancelBidApprovalAsAdmin,
+  listMyContracts,
+  confirmContractCompletionAsAdmin,
+  validateProgressStageAsAdmin,
+} from "../controllers/adminLifecycleController.js";
+import {
+  uploadExcel,
+  handleUploadError,
+  validateFileExists,
+  logUpload,
+} from "../middleware/uploadMiddleware.js";
+import {
   authenticateAdmin,
   isAdminOrHigher,
   isModeratorOrHigher,
@@ -128,6 +175,116 @@ router.get("/properties/:id", authenticateAdmin, isModeratorOrHigher, getPropert
 router.post("/properties/:id/flag", authenticateAdmin, isModeratorOrHigher, flagPropertyHandler);
 router.post("/properties/:id/unflag", authenticateAdmin, isModeratorOrHigher, unflagPropertyHandler);
 router.post("/properties/:id/notes", authenticateAdmin, isModeratorOrHigher, addPropertyNotesHandler);
+
+// Property CRUD (admin self-owns OR acts on behalf of a property manager)
+router.post("/properties", authenticateAdmin, isAdminOrHigher, adminCreateProperty);
+router.put("/properties/:id", authenticateAdmin, isAdminOrHigher, adminUpdateProperty);
+router.delete("/properties/:id", authenticateAdmin, isAdminOrHigher, adminDeleteProperty);
+
+// Manager directory for the "act on behalf of" dropdown
+router.get("/managers", authenticateAdmin, isAdminOrHigher, listManagers);
+
+// Job CRUD (admin self-owns OR acts on behalf of a property manager)
+router.post("/jobs", authenticateAdmin, isAdminOrHigher, adminCreateJob);
+router.put("/jobs/:id", authenticateAdmin, isAdminOrHigher, adminUpdateJob);
+router.delete("/jobs/:id", authenticateAdmin, isAdminOrHigher, adminDeleteJob);
+
+// Admin-owned listings (the "My Properties" / "My Jobs" pages)
+router.get("/my-properties", authenticateAdmin, isAdminOrHigher, listMyProperties);
+router.get("/my-jobs", authenticateAdmin, isAdminOrHigher, listMyJobs);
+
+// Job lifecycle — bids on admin-owned jobs + bid actions
+router.get(
+  "/my-jobs/:jobId/bids",
+  authenticateAdmin, isAdminOrHigher, listBidsOnMyJob
+);
+router.patch(
+  "/bids/:id/approve",
+  authenticateAdmin, isAdminOrHigher, approveBidAsAdmin
+);
+router.patch(
+  "/bids/:id/decline",
+  authenticateAdmin, isAdminOrHigher, declineBidAsAdmin
+);
+router.patch(
+  "/bids/:id/cancel-approval",
+  authenticateAdmin, isAdminOrHigher, cancelBidApprovalAsAdmin
+);
+
+// Admin-owned contracts
+router.get(
+  "/my-contracts",
+  authenticateAdmin, isAdminOrHigher, listMyContracts
+);
+router.post(
+  "/contracts/:id/confirm-completion",
+  authenticateAdmin, isAdminOrHigher, confirmContractCompletionAsAdmin
+);
+
+// Progress stage validation on an admin-owned job
+router.put(
+  "/progress/stage/:stageId/validate",
+  authenticateAdmin, isAdminOrHigher, validateProgressStageAsAdmin
+);
+
+// Inspection upload (Excel → bulk job creation)
+// Two-step flow: upload+parse returns the parsed jobs; then create-jobs persists them.
+router.post(
+  "/inspections/parse",
+  authenticateAdmin,
+  isAdminOrHigher,
+  uploadExcel,
+  handleUploadError,
+  validateFileExists,
+  logUpload,
+  adminParseInspection
+);
+router.post(
+  "/inspections/create-jobs",
+  authenticateAdmin,
+  isAdminOrHigher,
+  adminCreateJobsFromInspection
+);
+
+// ============================================
+// Admin notifications (bell feed for admin-owned jobs/contracts)
+// ============================================
+router.get(
+  "/notifications",
+  authenticateAdmin, isAdminOrHigher, getAdminNotifications
+);
+router.get(
+  "/notifications/unread-count",
+  authenticateAdmin, isAdminOrHigher, getAdminUnreadCount
+);
+router.patch(
+  "/notifications/read-all",
+  authenticateAdmin, isAdminOrHigher, markAllAdminNotificationsAsRead
+);
+router.patch(
+  "/notifications/job/:jobId/read",
+  authenticateAdmin, isAdminOrHigher, markJobNotificationsAsRead
+);
+router.patch(
+  "/notifications/:id/read",
+  authenticateAdmin, isAdminOrHigher, markAdminNotificationAsRead
+);
+router.delete(
+  "/notifications/clear-all",
+  authenticateAdmin, isAdminOrHigher, clearAdminNotifications
+);
+router.delete(
+  "/notifications/:id",
+  authenticateAdmin, isAdminOrHigher, deleteAdminNotification
+);
+
+// Admin user management (create/list/update/deactivate admin accounts)
+// Listing & updating allowed for admin+; creating & deleting require super_admin
+// to prevent privilege escalation through self-managed admin accounts.
+router.get("/admins", authenticateAdmin, isAdminOrHigher, listAdmins);
+router.post("/admins", authenticateAdmin, isSuperAdmin, createAdmin);
+router.patch("/admins/:id", authenticateAdmin, isAdminOrHigher, updateAdmin);
+router.delete("/admins/:id", authenticateAdmin, isSuperAdmin, deleteAdmin);
 
 // Audit Logs
 router.get("/audit-logs", authenticateAdmin, isAdminOrHigher, getAuditLogsHandler);

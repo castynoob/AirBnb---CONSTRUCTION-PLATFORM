@@ -1,10 +1,12 @@
 // src/models/jobModel.js
 import pool from "../config/db.js";
 
-// 🟢 Create a new job (matches schema_postgres.sql)
+// 🟢 Create a new job (matches schema_postgres.sql + migration 009)
+// Exactly one of manager_id / admin_owner_id should be populated.
 export const createJob = async ({
   property_id,
-  manager_id,
+  manager_id = null,
+  admin_owner_id = null,
   title,
   description,
   category,
@@ -19,15 +21,16 @@ export const createJob = async ({
 }) => {
   const result = await pool.query(
     `INSERT INTO jobs (
-      property_id, manager_id, title, description, category, urgency,
+      property_id, manager_id, admin_owner_id, title, description, category, urgency,
       due_date, estimated_duration_days, budget_min, budget_max,
       is_budget_hidden, is_emergency, status
     ) VALUES (
-      $1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13
+      $1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14
     ) RETURNING *`,
     [
       property_id,
       manager_id,
+      admin_owner_id,
       title,
       description,
       category,
@@ -170,7 +173,8 @@ export const bulkCreateJobs = async (jobsArray) => {
     for (const jobData of jobsArray) {
       const {
         property_id,
-        manager_id,
+        manager_id = null,
+        admin_owner_id = null,
         title,
         description = '',
         category = 'Other',
@@ -187,15 +191,16 @@ export const bulkCreateJobs = async (jobsArray) => {
 
       const result = await client.query(
         `INSERT INTO jobs (
-          property_id, manager_id, title, description, category, urgency,
+          property_id, manager_id, admin_owner_id, title, description, category, urgency,
           due_date, estimated_duration_days, budget_min, budget_max,
           is_budget_hidden, is_emergency, status
         ) VALUES (
-          $1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13
+          $1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14
         ) RETURNING *`,
         [
           property_id,
           manager_id,
+          admin_owner_id,
           title,
           description,
           category,

@@ -101,11 +101,15 @@ export const submitBid = async (req, res) => {
       console.log(`📊 Bid count incremented: ${(bidLimit - req.bidsRemaining)}/${bidLimit}`);
     }
 
-    // 🔔 Send socket notification to the property manager
+    // 🔔 Send socket notification to whichever owner the job belongs to.
+    //   * Manager-owned job → notify the PM (legacy path)
+    //   * Admin-owned job   → notify the admin (new path, via admin_user_id)
     try {
-      // Get job details and manager info
+      // Get job + owner info. admin_owner_id is set for admin-owned jobs.
       const jobResult = await pool.query(
-        `SELECT j.title, j.manager_id, p.building_name, u.id as manager_user_id
+        `SELECT j.title, j.manager_id, j.admin_owner_id,
+                p.building_name,
+                u.id as manager_user_id
          FROM jobs j
          LEFT JOIN properties p ON j.property_id = p.id
          LEFT JOIN manager_profiles mp ON j.manager_id = mp.id
@@ -127,42 +131,34 @@ export const submitBid = async (req, res) => {
         const job = jobResult.rows[0];
         const entrepreneur = entrepreneurResult.rows[0];
         const io = getIO();
+        const displayName = entrepreneur.company_name || `${entrepreneur.first_name} ${entrepreneur.last_name}`;
 
-        if (io && job.manager_user_id) {
-          const managerRoom = job.manager_user_id.toString();
-          const roomSockets = io.sockets.adapter.rooms.get(managerRoom);
+        // Build the payload once — reused for socket emit + DB persist.
+        const newBidPayload = {
+          bidId: newBid.id,
+          bidderName: displayName,
+          bidderId: entrepreneur_id,
+          jobId: job_id,
+          jobTitle: job.title,
+          propertyName: job.building_name || '',
+          bidAmount: amount,
+          licenseNumber: entrepreneur.license_number || 'N/A',
+        };
 
-          console.log('🔔 NEW BID NOTIFICATION DEBUG:');
-          console.log('   Target manager user_id:', job.manager_user_id);
-          console.log('   Target room name:', managerRoom);
-          console.log('   Sockets in room:', roomSockets ? roomSockets.size : 0);
-          console.log('   Socket IDs in room:', roomSockets ? Array.from(roomSockets) : []);
-
-          // Log all connected sockets for debugging
-          console.log('   📋 All connected sockets:');
-          io.sockets.sockets.forEach((socket, socketId) => {
-            console.log(`      - Socket ${socketId}: userId=${socket.userId}, rooms=[${Array.from(socket.rooms).join(', ')}]`);
-          });
-
-          const displayName = entrepreneur.company_name || `${entrepreneur.first_name} ${entrepreneur.last_name}`;
-          io.to(managerRoom).emit('new_bid', {
-            bidId: newBid.id,
-            bidderName: displayName,
-            bidderId: entrepreneur_id,
-            jobId: job_id,
-            jobTitle: job.title,
-            propertyName: job.building_name || '',
-            bidAmount: amount,
-            licenseNumber: entrepreneur.license_number || 'N/A',
-          });
-          console.log('✅ new_bid event emitted to room:', managerRoom);
-
-          // 💾 Save bid notification to database for persistence
+        // ────────────────────────────────────────────────────────────────
+        // Path 1: PM-owned job
+        // ────────────────────────────────────────────────────────────────
+        if (job.manager_user_id) {
+          if (io) {
+            const managerRoom = job.manager_user_id.toString();
+            io.to(managerRoom).emit('new_bid', newBidPayload);
+            console.log('✅ new_bid emitted to manager room:', managerRoom);
+          }
           try {
             await createNotification({
               userId: job.manager_user_id,
               type: 'bid',
-              bidderId: entrepreneur.user_id, // Use user_id, not entrepreneur_profile_id
+              bidderId: entrepreneur.user_id,
               bidderName: displayName,
               jobId: job_id,
               jobTitle: job.title,
@@ -170,9 +166,38 @@ export const submitBid = async (req, res) => {
               bidAmount: amount,
               licenseNumber: entrepreneur.license_number || 'N/A',
             });
-            console.log(`💾 Bid notification saved to database for manager ${job.manager_user_id}`);
+            console.log(`💾 Bid notification saved for manager ${job.manager_user_id}`);
           } catch (notifDbError) {
-            console.error('❌ Failed to save bid notification to DB:', notifDbError);
+            console.error('❌ Failed to save manager bid notification:', notifDbError);
+          }
+        }
+
+        // ────────────────────────────────────────────────────────────────
+        // Path 2: Admin-owned job
+        // Notify via the admin socket room (we use the admin user id as the
+        // room name on connect) + persist a row with admin_user_id set.
+        // ────────────────────────────────────────────────────────────────
+        if (job.admin_owner_id) {
+          if (io) {
+            const adminRoom = `admin:${job.admin_owner_id}`;
+            io.to(adminRoom).emit('new_bid', newBidPayload);
+            console.log('✅ new_bid emitted to admin room:', adminRoom);
+          }
+          try {
+            await createNotification({
+              adminUserId: job.admin_owner_id,
+              type: 'bid',
+              bidderId: entrepreneur.user_id,
+              bidderName: displayName,
+              jobId: job_id,
+              jobTitle: job.title,
+              propertyName: job.building_name || '',
+              bidAmount: amount,
+              licenseNumber: entrepreneur.license_number || 'N/A',
+            });
+            console.log(`💾 Bid notification saved for admin ${job.admin_owner_id}`);
+          } catch (notifDbError) {
+            console.error('❌ Failed to save admin bid notification:', notifDbError);
           }
         }
       }

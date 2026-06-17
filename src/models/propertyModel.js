@@ -2,8 +2,11 @@
 import pool from "../config/db.js";
 
 // 🟢 Create a new property
+// Exactly one of manager_id / admin_owner_id should be populated. Both nullable
+// at the column level; ownership is enforced by callers.
 export const createProperty = async ({
-  manager_id,
+  manager_id = null,
+  admin_owner_id = null,
   address,
   city,
   province = null,
@@ -14,10 +17,10 @@ export const createProperty = async ({
   latitude = null,
   longitude = null,
 }) => {
-  // Count: 10 columns, 10 values
   const result = await pool.query(
     `INSERT INTO properties (
       manager_id,
+      admin_owner_id,
       address,
       city,
       province,
@@ -27,19 +30,20 @@ export const createProperty = async ({
       building_name,
       latitude,
       longitude
-    ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)
+    ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11)
     RETURNING *`,
     [
-      manager_id,      // $1
-      address,         // $2
-      city,            // $3
-      province,        // $4
-      postal_code,     // $5
-      num_units,       // $6
-      building_type,   // $7
-      building_name,   // $8
-      latitude,        // $9
-      longitude,       // $10
+      manager_id,       // $1
+      admin_owner_id,   // $2
+      address,          // $3
+      city,             // $4
+      province,         // $5
+      postal_code,      // $6
+      num_units,        // $7
+      building_type,    // $8
+      building_name,    // $9
+      latitude,         // $10
+      longitude,        // $11
     ]
   );
 

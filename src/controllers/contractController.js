@@ -475,6 +475,8 @@ const ContractController = {
       const { id } = req.params;
       const user_id = req.user.id;
 
+      // LEFT JOIN manager_profiles + dependent users mu so admin-owned
+      // contracts (manager_id IS NULL) are still returned to the entrepreneur.
       const result = await pool.query(
         `SELECT c.*,
                 j.title as job_title, j.description as job_description,
@@ -484,8 +486,8 @@ const ContractController = {
                 eu.first_name as entrepreneur_first_name, eu.last_name as entrepreneur_last_name
          FROM contracts c
          JOIN jobs j ON c.job_id = j.id
-         JOIN manager_profiles mp ON c.manager_id = mp.id
-         JOIN users mu ON mp.user_id = mu.id
+         LEFT JOIN manager_profiles mp ON c.manager_id = mp.id
+         LEFT JOIN users mu ON mp.user_id = mu.id
          JOIN entrepreneur_profiles ep ON c.entrepreneur_id = ep.id
          JOIN users eu ON ep.user_id = eu.id
          WHERE c.id = $1
@@ -544,6 +546,10 @@ const ContractController = {
       const user_id = req.user.id;
       const { status } = req.query;
 
+      // LEFT JOIN manager_profiles + dependent mu so admin-owned contracts
+      // appear in the entrepreneur's contract list. user_role treats anyone
+      // who's not the manager (which includes admin-owned cases where mp is
+      // NULL) as 'entrepreneur', which is correct for this endpoint's callers.
       let query = `
         SELECT c.*,
                j.title as job_title,
@@ -553,8 +559,8 @@ const ContractController = {
                CASE WHEN mp.user_id = $1 THEN 'manager' ELSE 'entrepreneur' END as user_role
         FROM contracts c
         JOIN jobs j ON c.job_id = j.id
-        JOIN manager_profiles mp ON c.manager_id = mp.id
-        JOIN users mu ON mp.user_id = mu.id
+        LEFT JOIN manager_profiles mp ON c.manager_id = mp.id
+        LEFT JOIN users mu ON mp.user_id = mu.id
         JOIN entrepreneur_profiles ep ON c.entrepreneur_id = ep.id
         JOIN users eu ON ep.user_id = eu.id
         WHERE (mp.user_id = $1 OR ep.user_id = $1)
@@ -609,6 +615,9 @@ const ContractController = {
       const { job_id } = req.params;
       const user_id = req.user.id;
 
+      // LEFT JOIN manager_profiles so admin-owned contracts (manager_id IS NULL,
+      // admin_owner_id IS NOT NULL) are not silently filtered out. The
+      // entrepreneur is the one calling this endpoint either way.
       const result = await pool.query(
         `SELECT c.*,
                 mp.user_id as manager_user_id,
@@ -618,7 +627,7 @@ const ContractController = {
                 d.file_size    as invoice_file_size,
                 d.file_type    as invoice_file_type
          FROM contracts c
-         JOIN manager_profiles mp ON c.manager_id = mp.id
+         LEFT JOIN manager_profiles mp ON c.manager_id = mp.id
          JOIN entrepreneur_profiles ep ON c.entrepreneur_id = ep.id
          LEFT JOIN documents d ON c.invoice_document_id = d.id
          WHERE c.job_id = $1
@@ -681,7 +690,9 @@ const ContractController = {
       const rawNote = req.body?.note;
       const note = typeof rawNote === 'string' ? rawNote.trim() : '';
 
-      // Get contract with both user IDs and names
+      // Get contract with both user IDs and names. LEFT JOIN on manager_profiles
+      // so admin-owned contracts (manager_id IS NULL) still surface — the
+      // entrepreneur needs to be able to confirm their side of completion.
       const contractResult = await pool.query(
         `SELECT c.*,
                 mp.user_id as manager_user_id,
@@ -690,9 +701,9 @@ const ContractController = {
                 mu.first_name as manager_first_name, mu.last_name as manager_last_name,
                 eu.first_name as entrepreneur_first_name, eu.last_name as entrepreneur_last_name
          FROM contracts c
-         JOIN manager_profiles mp ON c.manager_id = mp.id
+         LEFT JOIN manager_profiles mp ON c.manager_id = mp.id
          JOIN entrepreneur_profiles ep ON c.entrepreneur_id = ep.id
-         JOIN users mu ON mp.user_id = mu.id
+         LEFT JOIN users mu ON mp.user_id = mu.id
          JOIN users eu ON ep.user_id = eu.id
          JOIN jobs j ON c.job_id = j.id
          WHERE c.id = $1`,

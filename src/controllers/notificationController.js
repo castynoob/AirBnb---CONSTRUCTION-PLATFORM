@@ -227,10 +227,19 @@ const notificationController = {
 };
 
 // Helper function to create a notification (called from other controllers/socket)
+// Creates a notification row.
+//
+// Recipient identification (exactly one is expected):
+//   - userId       — a regular platform user (entrepreneur, manager, resident, supplier)
+//   - adminUserId  — an admin staff member (admin_users.id)
+//
+// If both are omitted the insert will fail at the DB level because of the
+// app-layer rule that at least one of (user_id, admin_user_id) must be set.
 export const createNotification = async (notificationData) => {
   try {
     const {
       userId,
+      adminUserId,
       type,
       senderId,
       senderName,
@@ -249,21 +258,28 @@ export const createNotification = async (notificationData) => {
       workTitle
     } = notificationData;
 
+    if (!userId && !adminUserId) {
+      throw new Error(
+        "createNotification: either userId or adminUserId is required."
+      );
+    }
+
     const result = await pool.query(
       `INSERT INTO notifications (
-        user_id, type, sender_id, sender_name, content, conversation_id,
+        user_id, admin_user_id, type, sender_id, sender_name, content, conversation_id,
         bidder_id, bidder_name, job_id, job_title, property_name, unit_name,
         bid_amount, license_number, contractor_id, contractor_name, work_title
-      ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17)
+      ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18)
       RETURNING *`,
       [
-        userId, type, senderId, senderName, content, conversationId,
+        userId || null, adminUserId || null, type, senderId, senderName, content, conversationId,
         bidderId, bidderName, jobId, jobTitle, propertyName, unitName,
         bidAmount, licenseNumber, contractorId, contractorName, workTitle
       ]
     );
 
-    console.log('📝 Notification created:', result.rows[0].id);
+    const recipient = adminUserId ? `admin:${adminUserId}` : `user:${userId}`;
+    console.log(`📝 Notification created (${recipient}):`, result.rows[0].id);
     return result.rows[0];
   } catch (error) {
     console.error('❌ Error creating notification:', error);
