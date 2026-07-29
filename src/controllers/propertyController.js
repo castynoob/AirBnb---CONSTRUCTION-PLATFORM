@@ -17,7 +17,8 @@ export const createProperty = async (req, res) => {
       building_type,
       building_name,
       latitude,
-      longitude
+      longitude,
+      condo_control_email,
     } = req.body;
 
     // Validate required fields
@@ -59,7 +60,9 @@ export const createProperty = async (req, res) => {
         building_type: building_type || "Apartment",
         building_name: building_name,
         latitude: latitude || null,
-        longitude: longitude || null
+        longitude: longitude || null,
+        // Optional Condo Control ingestion address for the announcement bridge.
+        condo_control_email: condo_control_email?.trim() || null,
     });
 
     // ============================================

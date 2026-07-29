@@ -1,5 +1,6 @@
 import residentModel from '../models/residentModel.js';
 import pool from '../config/db.js';
+import { broadcastAnnouncementToCondoControl } from '../services/condoControlBroadcast.js';
 
 const residentController = {
   // ============================================
@@ -371,7 +372,18 @@ const residentController = {
     try {
       const userId = req.user.id;
       const userRole = req.user.role;
-      const { property_id, title, content, type, priority, is_pinned } = req.body;
+      const {
+        property_id,
+        title,
+        content,
+        type,
+        priority,
+        is_pinned,
+        // Manager opts in per-announcement. Default false so nothing is sent
+        // externally without an explicit tick, even if the property has an
+        // ingestion address on file.
+        broadcast_to_condo_control,
+      } = req.body;
 
       if (userRole !== 'property_manager') {
         return res.status(403).json({
@@ -403,10 +415,37 @@ const residentController = {
         io.to(`property_${property_id}`).emit('new_announcement', announcement);
       }
 
+      // Broadcast to the property's Condo Control (or similar) inbox when the
+      // manager opted in on this announcement. Fire-and-forget: broadcasting
+      // must not block the create response, and any failure is surfaced to
+      // logs only — the announcement is already live on INTERVOS.
+      let condoControlBroadcast = null;
+      if (broadcast_to_condo_control) {
+        try {
+          const nameRow = await pool.query(
+            `SELECT COALESCE(mp.company_name, u.first_name || ' ' || u.last_name) AS sender_name
+             FROM users u
+             LEFT JOIN manager_profiles mp ON mp.user_id = u.id
+             WHERE u.id = $1`,
+            [userId]
+          );
+          const senderName = nameRow.rows[0]?.sender_name || 'Property Manager';
+          condoControlBroadcast = await broadcastAnnouncementToCondoControl({
+            announcement,
+            propertyId: property_id,
+            senderName,
+          });
+        } catch (broadcastErr) {
+          console.error('⚠️ Condo Control broadcast wrapper failed:', broadcastErr.message);
+          condoControlBroadcast = { ok: false, reason: 'error' };
+        }
+      }
+
       res.status(201).json({
         success: true,
         announcement,
-        message: 'Announcement created successfully'
+        message: 'Announcement created successfully',
+        condoControlBroadcast, // null when not requested; { ok, reason? } otherwise
       });
     } catch (error) {
       console.error('❌ Error creating announcement:', error);

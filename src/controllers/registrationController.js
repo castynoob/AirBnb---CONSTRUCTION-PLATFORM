@@ -3,6 +3,13 @@ import bcrypt from "bcryptjs";
 import crypto from "crypto";
 import { sendVerificationEmail } from "../config/emailConfig.js";
 import groupChatModel from "../models/groupChatModel.js";
+import {
+  validateRBQLicense,
+  persistRBQResult,
+  isRBQValidationEnabled,
+  normaliseRBQLicense,
+} from "../services/rbqValidationService.js";
+import { attemptReferralAttribution } from "./referralController.js";
 
 // 🟢 Register Entrepreneur
 export const registerEntrepreneur = async (req, res) => {
@@ -27,6 +34,7 @@ export const registerEntrepreneur = async (req, res) => {
     provider = "local", // default provider
     provider_id = null, // e.g. Google user ID
     terms_accepted_at,
+    referral_code, // optional — attributes the signup to the code's owner
   } = req.body;
 
   try {
@@ -86,6 +94,54 @@ export const registerEntrepreneur = async (req, res) => {
       });
     }
 
+    // -----------------------------------------------------------------
+    // RBQ license gate — hard block per the product decision. Only runs
+    // when the feature flag is on AND the queryRBQRegistry integration is
+    // wired to a real endpoint (otherwise the service returns 'unavailable'
+    // and we don't want to brick every signup).
+    //
+    // The result is captured in `rbqResult` so we can persist it onto the
+    // freshly created profile a few lines below.
+    // -----------------------------------------------------------------
+    let rbqResult = null;
+    if (isRBQValidationEnabled()) {
+      if (!normaliseRBQLicense(license_number)) {
+        return res.status(400).json({
+          code: "rbq_format",
+          message:
+            "The RBQ license must be 10 digits, formatted as NNNN-NNNN-NN.",
+        });
+      }
+      rbqResult = await validateRBQLicense(license_number);
+      if (!rbqResult.ok) {
+        // Only 'unavailable' would earn a retry; both cases block registration
+        // per the "hard block" product decision. Include reason so the frontend
+        // can differentiate copy.
+        return res.status(400).json({
+          code: rbqResult.reason === "unavailable" ? "rbq_unavailable" : "rbq_error",
+          message:
+            rbqResult.reason === "unavailable"
+              ? "We couldn't reach the RBQ registry to verify your licence. Please try again in a few minutes."
+              : "RBQ licence check failed. Please double-check your licence number and try again.",
+        });
+      }
+      if (rbqResult.status === "invalid") {
+        return res.status(400).json({
+          code: "rbq_invalid",
+          message:
+            "The RBQ registry has no record of this licence number. Please verify and try again.",
+        });
+      }
+      if (rbqResult.status === "restricted") {
+        return res.status(400).json({
+          code: "rbq_restricted",
+          message:
+            "This RBQ licence has active restrictions and cannot be used to register. Contact support if you believe this is a mistake.",
+          restrictions: rbqResult.restrictions || [],
+        });
+      }
+    }
+
     // Insert new user
     const userResult = await pool.query(
           `INSERT INTO users (email, password, first_name, last_name, role, provider, provider_id, email_verified, phone, verification_token, verification_token_expires, address, city, province, postal_code, country, terms_accepted, terms_accepted_at)
@@ -114,6 +170,22 @@ export const registerEntrepreneur = async (req, res) => {
 
     const userId = userResult.rows[0].id;
 
+    // Referral attribution — non-fatal. Awaited so the outcome (pending or
+    // blocked) can be returned in the response and surfaced to the user.
+    let referralOutcome = null;
+    if (referral_code) {
+      // Prefer X-Forwarded-For's leftmost IP (originating client) when behind
+      // Render/Cloudflare's proxy; fall back to Express's req.ip.
+      const forwarded = (req.headers["x-forwarded-for"] || "").toString().split(",")[0].trim();
+      const signupIp = forwarded || req.ip || null;
+      referralOutcome = await attemptReferralAttribution({
+        newUserId: userId, referralCodeInput: referral_code, signupIp,
+      }).catch((err) => {
+        console.error("⚠️ referral hook failed (entrepreneur):", err.message);
+        return null;
+      });
+    }
+
     // Insert entrepreneur profile
     const profileResult = await pool.query(
       `INSERT INTO entrepreneur_profiles (
@@ -133,6 +205,18 @@ export const registerEntrepreneur = async (req, res) => {
         "none",
       ]
     );
+
+    // Persist the RBQ result onto the profile so managers see the badge and
+    // admins can audit. Only runs when we actually did a check above; done in
+    // a try/catch so a persistence hiccup doesn't fail the whole registration
+    // (the account is created regardless).
+    if (rbqResult) {
+      try {
+        await persistRBQResult(profileResult.rows[0].id, rbqResult);
+      } catch (persistErr) {
+        console.error("⚠️ RBQ persist failed (registration continues):", persistErr.message);
+      }
+    }
 
     // Send verification email for local registrations (non-blocking)
     let emailSent = false;
@@ -159,6 +243,9 @@ export const registerEntrepreneur = async (req, res) => {
       profile: profileResult.rows[0],
       emailSent,
       autoVerified,
+      // Referral outcome so the frontend can toast the user if the code was
+      // silently rejected. Shape: { pending: true } | { blocked: "reason" } | null
+      referral: referralOutcome,
     });
   } catch (error) {
     console.error("Error registering entrepreneur:", error);
@@ -185,6 +272,7 @@ export const registerManager = async (req, res) => {
     provider = "local",
     provider_id = null,
     terms_accepted_at,
+    referral_code, // optional — attributes the signup to the code's owner
   } = req.body;
 
   try {
@@ -254,6 +342,20 @@ export const registerManager = async (req, res) => {
 
     const userId = userResult.rows[0].id;
 
+    // Referral attribution — non-fatal. If a valid referral_code was passed,
+    // record the referral row and issue the new user's welcome promo.
+    let referralOutcome = null;
+    if (referral_code) {
+      const forwarded = (req.headers["x-forwarded-for"] || "").toString().split(",")[0].trim();
+      const signupIp = forwarded || req.ip || null;
+      referralOutcome = await attemptReferralAttribution({
+        newUserId: userId, referralCodeInput: referral_code, signupIp,
+      }).catch((err) => {
+        console.error("⚠️ referral hook failed (manager):", err.message);
+        return null;
+      });
+    }
+
     const profileResult = await pool.query(
       `INSERT INTO manager_profiles (user_id, company_name, address)
        VALUES ($1, $2, $3)
@@ -286,6 +388,9 @@ export const registerManager = async (req, res) => {
       profile: profileResult.rows[0],
       emailSent,
       autoVerified,
+      // Referral outcome, mirroring the entrepreneur endpoint. Only ever
+      // non-null when referrals get expanded to PMs (contractors-only today).
+      referral: referralOutcome,
     });
   } catch (error) {
     console.error("Error registering manager:", error);

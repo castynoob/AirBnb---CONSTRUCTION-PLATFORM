@@ -2,6 +2,7 @@ import stripe, { stripeConfig } from '../config/stripe.js';
 import Subscription from '../models/subscriptionModel.js';
 import { Promoter, PromoCodeRedemption } from '../models/promoterModel.js';
 import PromoCode from '../models/promoCodeModel.js';
+import { markReferralConverted, applyReferralDiscountAtCheckout } from './referralController.js';
 import db from '../config/db.js';
 import * as cache from '../config/cache.js';
 import { SUBSCRIPTION_KEYS } from '../utils/cacheKeys.js';
@@ -411,6 +412,23 @@ const PaymentController = {
                 }
             }
 
+            // Referral fallback — if the user didn't pass a promo code
+            // manually but they have a PENDING referral (signed up with
+            // someone's code), auto-generate + apply the referee's discount
+            // so it's redeemed at the same checkout. Non-fatal: if this
+            // returns null the subscription still proceeds at full price.
+            if (!stripePromoCodeId) {
+                try {
+                    const auto = await applyReferralDiscountAtCheckout({ userId: user_id });
+                    if (auto?.stripePromoCodeId) {
+                        stripePromoCodeId = auto.stripePromoCodeId;
+                        console.log(`🎁 Auto-applied referral discount for user ${user_id}`);
+                    }
+                } catch (err) {
+                    console.error('⚠️ referral auto-apply failed (non-fatal):', err.message);
+                }
+            }
+
             // Build subscription options
             const subscriptionOptions = {
                 customer: customer.id,
@@ -722,6 +740,253 @@ const PaymentController = {
         } catch (error) {
             console.error('❌ Get subscription error:', error);
             res.status(500).json({ error: error.message });
+        }
+    },
+
+    /**
+     * CHANGE PLAN
+     * POST /api/payments/change-plan
+     * Body: { plan_type: 'starter' | 'basic' | 'premium' }
+     *
+     * Swaps the price on the user's existing Stripe subscription. Preserves the
+     * current trial (Stripe carries `trial_end` across `subscriptions.update`)
+     * so a Starter-trial user can switch to Premium without losing the trial.
+     * For active (non-trial) subscriptions, prorates the difference using
+     * Stripe's `create_prorations` behavior.
+     *
+     * Fixes the previous UX gap where "change plan" pushed users into
+     * `create-subscription`, which refuses with "Active subscription exists".
+     */
+    async changePlan(req, res) {
+        try {
+            const user_id = req.user.id;
+            const { plan_type } = req.body;
+
+            if (!['starter', 'basic', 'premium'].includes(plan_type)) {
+                return res.status(400).json({
+                    error: 'Invalid plan type',
+                    message: 'Plan must be "starter", "basic", or "premium"'
+                });
+            }
+
+            const subscription = await Subscription.findByUserId(user_id);
+            if (!subscription) {
+                return res.status(404).json({
+                    error: 'No subscription',
+                    message: 'No existing subscription to change. Create one first.'
+                });
+            }
+
+            if (!['active', 'trialing'].includes(subscription.status)) {
+                return res.status(400).json({
+                    error: 'Subscription not modifiable',
+                    message: `Cannot change plan while subscription is ${subscription.status}.`
+                });
+            }
+
+            if (subscription.plan_type === plan_type) {
+                return res.status(400).json({
+                    error: 'Already on this plan',
+                    message: `You are already on the ${plan_type} plan.`
+                });
+            }
+
+            const newPlan = PLANS[plan_type];
+            if (!newPlan?.price_id) {
+                return res.status(500).json({
+                    error: 'Plan misconfigured',
+                    message: `Price ID for plan "${plan_type}" is not configured.`
+                });
+            }
+
+            // Push the swap to Stripe, then sync the local row.
+            //
+            // Path A (preferred): stripe.subscriptions.update — swaps the price
+            //   on the SAME subscription. Preserves trial_end + subscription id.
+            //   Fails when the new price is in a different currency than the
+            //   existing subscription (Stripe restriction).
+            //
+            // Path B (fallback): cancel-and-recreate. Cancels the old Stripe
+            //   subscription immediately, creates a fresh one on the customer
+            //   with the new price. Because the new subscription starts in the
+            //   new price's currency, no mismatch. Any remaining trial days
+            //   are carried across via `trial_period_days`. Yields a new
+            //   stripe_subscription_id — we sync that into the local row.
+            let stripeSub = null;
+            let usedRecreatePath = false;
+            if (subscription.stripe_subscription_id) {
+                const current = await stripe.subscriptions.retrieve(subscription.stripe_subscription_id);
+                const currentItemId = current.items?.data?.[0]?.id;
+                if (!currentItemId) {
+                    return res.status(500).json({
+                        error: 'Stripe subscription malformed',
+                        message: 'Existing subscription has no items. Please contact support.'
+                    });
+                }
+
+                try {
+                    stripeSub = await stripe.subscriptions.update(
+                        subscription.stripe_subscription_id,
+                        {
+                            items: [{
+                                id: currentItemId,
+                                price: newPlan.price_id,
+                            }],
+                            // Trials keep their remaining days; active subs prorate.
+                            proration_behavior:
+                                subscription.status === 'trialing'
+                                    ? 'none'
+                                    : 'create_prorations',
+                            metadata: {
+                                ...(current.metadata || {}),
+                                plan_type,
+                            },
+                        }
+                    );
+                } catch (stripeErr) {
+                    const isCurrencyMismatch =
+                        typeof stripeErr.message === 'string' &&
+                        /only supports.+currency|expected currency/i.test(stripeErr.message);
+
+                    if (!isCurrencyMismatch) {
+                        console.error('❌ Stripe subscription update error:', stripeErr.message);
+                        return res.status(502).json({
+                            error: 'stripe_error',
+                            message: stripeErr.message,
+                        });
+                    }
+
+                    // ── Currency-mismatch fallback: cancel-and-recreate ──
+                    console.warn(
+                        `⚠️ Currency mismatch swapping to ${plan_type}. ` +
+                        `Falling back to cancel-and-recreate for user ${user_id}.`
+                    );
+                    try {
+                        // Preserve trial days across the recreate. Stripe uses
+                        // whole-day granularity; round up so users don't lose a
+                        // partial trial day.
+                        const trialEndSec = current.trial_end;
+                        const daysLeftOnTrial =
+                            trialEndSec
+                                ? Math.max(0, Math.ceil((trialEndSec * 1000 - Date.now()) / (1000 * 60 * 60 * 24)))
+                                : 0;
+
+                        // Cancel the old subscription IMMEDIATELY — not at
+                        // period end, because we're about to create a new one
+                        // that supersedes it. If cancel fails we bail out;
+                        // creating a second parallel subscription would be
+                        // worse than the current situation.
+                        await stripe.subscriptions.cancel(subscription.stripe_subscription_id);
+
+                        // Create the new subscription on the same customer,
+                        // reusing whatever payment method Stripe already has as
+                        // the customer's default.
+                        stripeSub = await stripe.subscriptions.create({
+                            customer: subscription.stripe_customer_id,
+                            items: [{ price: newPlan.price_id }],
+                            ...(daysLeftOnTrial > 0 ? { trial_period_days: daysLeftOnTrial } : {}),
+                            expand: ['latest_invoice.payment_intent'],
+                            metadata: {
+                                user_id,
+                                entrepreneur_profile_id: subscription.entrepreneur_profile_id,
+                                plan_type,
+                                recreated_from: subscription.stripe_subscription_id,
+                                reason: 'currency_mismatch',
+                            },
+                        });
+                        usedRecreatePath = true;
+                    } catch (recreateErr) {
+                        console.error('❌ Cancel-and-recreate fallback failed:', recreateErr.message);
+                        return res.status(502).json({
+                            error: 'currency_mismatch_recreate_failed',
+                            message:
+                                "This plan is in a different currency than your current one, and we couldn't automatically recreate the subscription: " +
+                                recreateErr.message,
+                        });
+                    }
+                }
+            }
+
+            // Update local DB using the same upsert as create-subscription so
+            // entrepreneur_profiles.subscription_plan stays in sync.
+            const nextPeriodStart = stripeSub?.current_period_start
+                ? new Date(stripeSub.current_period_start * 1000)
+                : new Date(subscription.current_period_start);
+            const nextPeriodEnd = stripeSub?.current_period_end
+                ? new Date(stripeSub.current_period_end * 1000)
+                : new Date(subscription.current_period_end);
+            const trialEnd = stripeSub?.trial_end
+                ? new Date(stripeSub.trial_end * 1000)
+                : subscription.trial_end
+                    ? new Date(subscription.trial_end)
+                    : null;
+
+            const updated = await Subscription.upsert({
+                user_id,
+                entrepreneur_profile_id: subscription.entrepreneur_profile_id,
+                stripe_customer_id: subscription.stripe_customer_id,
+                // Recreate path yields a fresh Stripe subscription id — must be
+                // persisted so future actions (cancel, next update) target the
+                // right subscription. Otherwise the update path is a no-op swap
+                // and we keep the same id.
+                stripe_subscription_id:
+                    usedRecreatePath && stripeSub?.id
+                        ? stripeSub.id
+                        : subscription.stripe_subscription_id,
+                plan_type,
+                status: stripeSub?.status || subscription.status,
+                trial_end: trialEnd,
+                current_period_start: nextPeriodStart,
+                current_period_end: nextPeriodEnd,
+            });
+
+            // Recreate bid_counts row when downgrading INTO a metered plan.
+            // Premium → Starter/Basic won't have a metered row yet; make sure
+            // the limit is enforced from the next bid on.
+            try {
+                if (plan_type === 'starter' || plan_type === 'basic') {
+                    const bidsLimit = plan_type === 'starter' ? 15 : 30;
+                    await db.query(
+                        `INSERT INTO bid_counts (entrepreneur_profile_id, period_start, period_end, bids_used, bids_limit)
+                         VALUES ($1, $2, $3, 0, $4)
+                         ON CONFLICT DO NOTHING`,
+                        [subscription.entrepreneur_profile_id, nextPeriodStart, nextPeriodEnd, bidsLimit]
+                    );
+                }
+            } catch (bidErr) {
+                console.warn('⚠️ bid_counts refresh non-fatal:', bidErr.message);
+            }
+
+            // Invalidate the cached subscription so requireSubscription sees
+            // the new plan_type on the very next request.
+            try { await cache.del(SUBSCRIPTION_KEYS.status(user_id)); } catch (_) {}
+
+            // Log activity
+            try {
+                const ipAddress = req.ip || req.headers['x-forwarded-for'] || req.connection?.remoteAddress;
+                const userAgent = req.headers['user-agent'];
+                await createUserActivityLog(
+                    user_id,
+                    ActivityActions.SUBSCRIPTION_UPDATED || 'SUBSCRIPTION_UPDATED',
+                    EntityTypes.SUBSCRIPTION,
+                    subscription.stripe_subscription_id,
+                    { from: subscription.plan_type, to: plan_type },
+                    ipAddress,
+                    userAgent
+                );
+            } catch (_) {}
+
+            return res.json({
+                success: true,
+                message: usedRecreatePath
+                    ? `Plan changed from ${subscription.plan_type} to ${plan_type}. Subscription was recreated (currency mismatch) — remaining trial days were preserved.`
+                    : `Plan changed from ${subscription.plan_type} to ${plan_type}.`,
+                subscription: updated,
+                recreated: usedRecreatePath,
+            });
+        } catch (err) {
+            console.error('❌ changePlan error:', err);
+            return res.status(500).json({ error: err.message });
         }
     },
 
@@ -1205,6 +1470,17 @@ const PaymentController = {
                         if (subData.rows.length > 0) {
                             await cache.del(SUBSCRIPTION_KEYS.status(subData.rows[0].user_id));
                             console.log(`🗑️ Cache invalidated for user ${subData.rows[0].user_id}`);
+
+                            // Referral conversion trigger — fires only on the
+                            // FIRST invoice of a new subscription (Stripe sets
+                            // billing_reason='subscription_create' for that
+                            // invoice; renewals use 'subscription_cycle').
+                            // markReferralConverted is idempotent so double-
+                            // firing is safe. Non-fatal on failure.
+                            if (succeededInvoice.billing_reason === 'subscription_create') {
+                                markReferralConverted({ refereeUserId: subData.rows[0].user_id })
+                                    .catch((err) => console.error('⚠️ referral conversion hook failed:', err.message));
+                            }
                         }
                     }
                     break;

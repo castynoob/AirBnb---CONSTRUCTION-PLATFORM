@@ -8,6 +8,7 @@ import {
   getAllJobs,
   getJobById,
   getJobsByManagerId,
+  getManagerDashboard,
   updateJob,
   deleteJob,
   archiveJob,
@@ -32,6 +33,21 @@ router.get("/:id", verifyToken, cacheMiddleware((req) => JOB_KEYS.single(req.par
 
 // Jobs by manager - CACHED (5 minutes)
 router.get("/manager/:manager_id", verifyToken, cacheMiddleware((req) => JOB_KEYS.byManager(req.params.manager_id), TTL.FIVE_MINUTES), getJobsByManagerId);
+
+// 🚀 Manager dashboard feed — paginated + enriched in ONE query. Cached per
+//   (manager, cursor, limit) so page 1 stays warm even when other pages are
+//   requested. Invalidated by the same `jobs:*` pattern that create/update/
+//   delete already fire (see jobController.js).
+router.get(
+  "/manager/:manager_id/dashboard",
+  verifyToken,
+  cacheMiddleware(
+    (req) =>
+      `jobs:dashboard:${req.params.manager_id}:${req.query.cursor || "first"}:${req.query.limit || 20}`,
+    TTL.FIVE_MINUTES
+  ),
+  getManagerDashboard
+);
 
 // Jobs by entrepreneur - CACHED (5 minutes)
 router.get("/entrepreneur/:entrepreneur_id", verifyToken, cacheMiddleware((req) => JOB_KEYS.byEntrepreneur(req.params.entrepreneur_id), TTL.FIVE_MINUTES), getJobsByEntrepreneurId);
@@ -81,7 +97,9 @@ router.post(
   authorizeRoles("property_manager", "entrepreneur"),
   uploadMultipleImages,  // Supports multiple files
   handleUploadError,
-  invalidateCache((req) => [JOB_KEYS.forJob(req.params.id)]),
+  // Also bust the images-list cache key — otherwise the 5 min TTL on the GET
+  // route (see below) can hide freshly uploaded images.
+  invalidateCache((req) => [JOB_KEYS.forJob(req.params.id), `job:${req.params.id}:images`]),
   uploadJobImages
 );
 
@@ -92,7 +110,7 @@ router.post(
   authorizeRoles("property_manager", "entrepreneur"),
   uploadImage,  // Single file
   handleUploadError,
-  invalidateCache((req) => [JOB_KEYS.forJob(req.params.id)]),
+  invalidateCache((req) => [JOB_KEYS.forJob(req.params.id), `job:${req.params.id}:images`]),
   uploadJobImages
 );
 

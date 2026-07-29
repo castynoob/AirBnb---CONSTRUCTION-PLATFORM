@@ -39,6 +39,7 @@ import jobRoutes from "./src/routes/jobRoutes.js";
 import bidRoutes from "./src/routes/bidRoutes.js";
 import propertyRoutes from "./src/routes/propertyRoutes.js";
 import paymentRoutes from "./src/routes/paymentRoutes.js";
+import PaymentController from "./src/controllers/paymentController.js";
 import messageRoutes from "./src/routes/messageRoutes.js";
 import reviewRoutes from "./src/routes/reviewRoutes.js";
 import chatRoutes from "./src/routes/chatRoutes.js";
@@ -52,6 +53,12 @@ import statsRoutes from "./src/routes/statsRoutes.js";
 import notificationRoutes from "./src/routes/notificationRoutes.js";
 import debugRoutes from "./src/routes/debugRoutes.js";
 import residentRoutes from "./src/routes/residentRoutes.js";
+import residentRepairRoutes from "./src/routes/residentRepairRoutes.js";
+import directoryRoutes from "./src/routes/directoryRoutes.js";
+import jobInviteRoutes from "./src/routes/jobInviteRoutes.js";
+import referralRoutes, { adminRouter as referralAdminRouter } from "./src/routes/referralRoutes.js";
+import { pmRouter as propertyResidentPmRouter, residentRouter as propertyResidentInboxRouter, searchRouter as residentSearchRouter } from "./src/routes/propertyResidentRoutes.js";
+import unionRoutes from "./src/routes/unionRoutes.js";
 import groupChatRoutes from "./src/routes/groupChatRoutes.js";
 import contractRoutes from "./src/routes/contractRoutes.js";
 import adminRoutes from "./src/routes/adminRoutes.js";
@@ -128,11 +135,19 @@ app.set("io", io); // Make io accessible in controllers
 
 // ============================================
 // CRITICAL: WEBHOOK ROUTE FIRST (needs raw body)
+//
+// Attach the webhook handler DIRECTLY here — do NOT re-mount via
+// paymentRoutes. Mounting the whole router at /api/payments/webhook made
+// the effective URL /api/payments/webhook/webhook (because the router
+// itself declares router.post('/webhook', ...)), so Stripe's real webhook
+// (hitting /api/payments/webhook) fell through to the second, JSON-parsed
+// mount below — signature verification then failed on every event. See
+// bugfix log for details.
 // ============================================
-app.use(
+app.post(
   "/api/payments/webhook",
   express.raw({ type: "application/json" }),
-  paymentRoutes
+  PaymentController.handleWebhook
 );
 
 // ============================================
@@ -185,6 +200,17 @@ app.use("/api", registrationRoutes);
 app.use("/api", geocodeRoutes); // Geocode proxy - no auth needed for registration
 app.use("/api", statsRoutes); // Public platform stats - no auth needed
 app.use("/api", debugRoutes); // DEBUG - No auth, must be before messageRoutes
+// Public specialist directory — mounted BEFORE messageRoutes so its
+// `/api/*` auth wall doesn't reject anonymous visitors browsing the
+// contractor listings.
+app.use("/api/directory", directoryRoutes);
+app.use("/api/invites", jobInviteRoutes);
+app.use("/api/referrals", referralRoutes);
+app.use("/api/admin/referral-settings", referralAdminRouter);
+app.use("/api/properties/:propertyId/residents", propertyResidentPmRouter);
+app.use("/api/residents/invites", propertyResidentInboxRouter);
+app.use("/api/residents/search",  residentSearchRouter);
+app.use("/api/unions", unionRoutes);
 app.use("/api/admin/promoters", promoterRoutes); // Promoter management routes - must be BEFORE /api/admin
 app.use("/api/admin/promo-codes", promoCodeRoutes); // Promo code management routes
 app.use("/api/admin", adminRoutes); // Admin routes - has its own auth
@@ -206,6 +232,7 @@ app.use("/api/inspections", inspectionRoutes);
 app.use("/api", favoriteRoutes);
 app.use("/api", notificationRoutes);
 app.use("/api/residents", residentRoutes);
+app.use("/api/resident/repairs", residentRepairRoutes);
 app.use("/api/residents/group-chats", groupChatRoutes);
 app.use("/api/contracts", contractRoutes);
 app.use("/api", supportRoutes);

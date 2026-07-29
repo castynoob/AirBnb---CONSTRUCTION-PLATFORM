@@ -64,6 +64,8 @@ import {
   addDisputeNotesHandler,
   updateDisputePriorityHandler,
   escalateDisputeHandler,
+  getBidAddendaHandler,
+  getBidAddendaStatsHandler,
 } from "../controllers/adminController.js";
 import {
   listManagers,
@@ -97,6 +99,10 @@ import {
   deleteAdminNotification,
   clearAdminNotifications,
 } from "../controllers/adminNotificationController.js";
+import {
+  adminOverrideRBQ,
+  adminRecheckRBQ,
+} from "../controllers/rbqController.js";
 import {
   listBidsOnMyJob,
   approveBidAsAdmin,
@@ -247,6 +253,19 @@ router.post(
 );
 
 // ============================================
+// RBQ (Quebec contractor licence) admin controls
+// Escape valves for when the registry integration is offline or edge-case.
+// ============================================
+router.post(
+  "/rbq/:entrepreneurProfileId/override",
+  authenticateAdmin, isAdminOrHigher, adminOverrideRBQ
+);
+router.post(
+  "/rbq/:entrepreneurProfileId/recheck",
+  authenticateAdmin, isAdminOrHigher, adminRecheckRBQ
+);
+
+// ============================================
 // Admin notifications (bell feed for admin-owned jobs/contracts)
 // ============================================
 router.get(
@@ -317,6 +336,10 @@ router.patch("/support/tickets/:id/status", authenticateAdmin, isModeratorOrHigh
 // Dispute Management
 router.get("/disputes", authenticateAdmin, isModeratorOrHigher, getDisputesHandler);
 router.get("/disputes/stats", authenticateAdmin, isModeratorOrHigher, getDisputeStatsHandler);
+
+// Bid addenda — cross-platform Q&A / price adjustments (audit-only view)
+router.get("/bid-addenda", authenticateAdmin, isModeratorOrHigher, getBidAddendaHandler);
+router.get("/bid-addenda/stats", authenticateAdmin, isModeratorOrHigher, getBidAddendaStatsHandler);
 router.get("/disputes/types", authenticateAdmin, isModeratorOrHigher, getDisputeTypesHandler);
 router.get("/disputes/:id", authenticateAdmin, isModeratorOrHigher, getDisputeHandler);
 router.patch("/disputes/:id/status", authenticateAdmin, isModeratorOrHigher, updateDisputeStatusHandler);

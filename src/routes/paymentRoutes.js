@@ -30,6 +30,15 @@ router.post('/cancel-subscription',
     PaymentController.cancelSubscription
 );
 
+// Swap the price on an existing Stripe subscription. Used by SubscriptionModal
+// when the user is on a plan already — creating a new subscription would 400.
+router.post('/change-plan',
+    authenticateToken,
+    requireEntrepreneur,
+    requireSubscription,
+    PaymentController.changePlan
+);
+
 router.put('/payment-method',
     authenticateToken,
     requireEntrepreneur,
@@ -109,9 +118,10 @@ router.get('/stripe-config', PaymentController.getStripeConfig);
 router.get('/tax-config', PaymentController.getTaxConfig);
 
 // ============================================
-// WEBHOOK ROUTE (NO AUTHENTICATION)
+// WEBHOOK ROUTE — mounted directly in server.js, NOT here.
+// Stripe requires the raw body (Buffer) for signature verification, and
+// this router is mounted after express.json() runs — so it would parse the
+// body first and break constructEvent(). See server.js:~132 for the mount.
 // ============================================
-
-router.post('/webhook', PaymentController.handleWebhook);
 
 export default router;

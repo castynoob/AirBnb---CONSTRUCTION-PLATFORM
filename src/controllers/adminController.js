@@ -83,6 +83,15 @@ import {
   getJobOwnerUserId,
 } from "../models/notificationModel.js";
 import { declineAllBidsForJob } from "../models/bidModel.js";
+import {
+  emailAdminReplyToUser,
+  emailStatusChangeToUser,
+} from "../config/supportEmail.js";
+import pool from "../config/db.js";
+import {
+  getAllBidAddendaAdmin,
+  getBidAddendaStats,
+} from "../models/bidAddendaModel.js";
 
 dotenv.config();
 
@@ -1512,6 +1521,34 @@ export const addTicketMessageHandler = async (req, res) => {
       { is_internal: isInternal }
     );
 
+    // Fire-and-forget email to the ticket owner — only for public replies.
+    // Internal notes stay internal. Never blocks the response.
+    if (!isInternal) {
+      pool.query(
+        `SELECT st.id, st.ticket_number, st.subject, st.category, st.priority, st.status,
+                u.email, u.first_name, u.last_name, u.role
+           FROM support_tickets st
+           JOIN users u ON u.id = st.user_id
+          WHERE st.id = $1`,
+        [id]
+      )
+        .then((r) => {
+          const row = r.rows[0];
+          if (!row) return;
+          return emailAdminReplyToUser({
+            ticket: {
+              id: row.id, ticket_number: row.ticket_number, subject: row.subject,
+              category: row.category, priority: row.priority, status: row.status,
+            },
+            user: {
+              email: row.email, first_name: row.first_name, last_name: row.last_name, role: row.role,
+            },
+            messageText: message.trim(),
+          });
+        })
+        .catch((err) => console.error('⚠️ admin-reply email failed:', err.message));
+    }
+
     res.status(201).json({ message: "Reply sent", ticketMessage });
   } catch (err) {
     console.error("Add ticket message error:", err);
@@ -1530,6 +1567,18 @@ export const updateTicketStatusHandler = async (req, res) => {
       return res.status(400).json({ message: "Invalid status" });
     }
 
+    // Capture the previous status + user email BEFORE we update, so the
+    // status-change email has both sides of the transition and doesn't need
+    // a second lookup for the recipient.
+    const before = await pool.query(
+      `SELECT st.status, st.ticket_number, st.subject,
+              u.email, u.first_name, u.last_name, u.role
+         FROM support_tickets st
+         JOIN users u ON u.id = st.user_id
+        WHERE st.id = $1`,
+      [id]
+    );
+
     const ticket = await updateTicketStatus(id, status, req.admin.id);
 
     if (!ticket) {
@@ -1544,6 +1593,20 @@ export const updateTicketStatusHandler = async (req, res) => {
       id,
       { new_status: status }
     );
+
+    // Fire-and-forget user email — only when the status actually changed.
+    if (before.rows[0] && before.rows[0].status !== status) {
+      const b = before.rows[0];
+      emailStatusChangeToUser({
+        ticket: {
+          id, ticket_number: b.ticket_number, subject: b.subject, status,
+        },
+        user: {
+          email: b.email, first_name: b.first_name, last_name: b.last_name, role: b.role,
+        },
+        previousStatus: b.status,
+      }).catch((err) => console.error('⚠️ status-change email failed:', err.message));
+    }
 
     res.json({ message: "Status updated", ticket });
   } catch (err) {
@@ -1782,6 +1845,38 @@ export const escalateDisputeHandler = async (req, res) => {
     res.json({ message: "Dispute escalated", dispute });
   } catch (err) {
     console.error("Escalate dispute error:", err);
+    res.status(500).json({ message: "Server error" });
+  }
+};
+
+// ============================================
+// BID ADDENDA (cross-platform, admin visibility)
+// ============================================
+
+export const getBidAddendaHandler = async (req, res) => {
+  try {
+    const page = Math.max(1, parseInt(req.query.page || "1", 10));
+    const limit = Math.min(100, Math.max(1, parseInt(req.query.limit || "20", 10)));
+    const offset = (page - 1) * limit;
+    const { search, status, from, to } = req.query;
+
+    const result = await getAllBidAddendaAdmin(
+      { search, status, from, to },
+      { limit, offset }
+    );
+    res.json(result);
+  } catch (err) {
+    console.error("Get bid addenda error:", err);
+    res.status(500).json({ message: "Server error" });
+  }
+};
+
+export const getBidAddendaStatsHandler = async (req, res) => {
+  try {
+    const stats = await getBidAddendaStats();
+    res.json({ stats });
+  } catch (err) {
+    console.error("Get bid addenda stats error:", err);
     res.status(500).json({ message: "Server error" });
   }
 };

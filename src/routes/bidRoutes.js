@@ -18,8 +18,26 @@ import {
   updateBid,
   deleteBid
 } from "../controllers/bidController.js";
+import {
+  listAddenda,
+  proposeAddendum,
+  acceptAddendum,
+  rejectAddendum,
+  withdrawAddendum,
+} from "../controllers/bidAddendaController.js";
 
 const router = express.Router();
+
+// -----------------------------------------------------------------------------
+// Bid addenda — post-submission price adjustments (Q&A → price change flow).
+// Auth is per-endpoint inside the controller (must be either the contractor
+// who submitted the bid or the PM who owns the job).
+// -----------------------------------------------------------------------------
+router.get("/:bidId/addenda",                verifyToken, listAddenda);
+router.post("/:bidId/addenda",               verifyToken, proposeAddendum);
+router.patch("/:bidId/addenda/:id/accept",   verifyToken, acceptAddendum);
+router.patch("/:bidId/addenda/:id/reject",   verifyToken, rejectAddendum);
+router.patch("/:bidId/addenda/:id/withdraw", verifyToken, withdrawAddendum);
 
 // Entrepreneur endpointss
 // Submit bid - Invalidate bid caches

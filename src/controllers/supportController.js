@@ -4,6 +4,10 @@
 // ============================================
 
 import pool from '../config/db.js';
+import {
+  emailNewTicketToAdmin,
+  emailUserReplyToAdmin,
+} from '../config/supportEmail.js';
 
 const supportController = {
   /**
@@ -39,6 +43,18 @@ const supportController = {
         userId,
         category
       });
+
+      // Fire-and-forget email to the routed admin inbox. Failure must NOT
+      // break the API response; the ticket is already saved and visible in
+      // the admin dashboard regardless.
+      pool.query(
+        'SELECT id, email, first_name, last_name, role FROM users WHERE id = $1',
+        [userId]
+      )
+        .then((r) => {
+          if (r.rows[0]) return emailNewTicketToAdmin({ ticket, user: r.rows[0] });
+        })
+        .catch((err) => console.error('⚠️ new-ticket email lookup failed:', err.message));
 
       res.status(201).json({
         success: true,
@@ -173,9 +189,14 @@ const supportController = {
         });
       }
 
-      // Verify the ticket belongs to the user
+      // Verify the ticket belongs to the user — grab ticket + user in one
+      // trip so we can email the admin without a second lookup.
       const ticketCheck = await pool.query(
-        'SELECT id FROM support_tickets WHERE id = $1 AND user_id = $2',
+        `SELECT st.id, st.ticket_number, st.subject, st.category, st.priority, st.status,
+                u.id AS uid, u.email, u.first_name, u.last_name, u.role
+           FROM support_tickets st
+           JOIN users u ON u.id = st.user_id
+          WHERE st.id = $1 AND st.user_id = $2`,
         [ticketId, userId]
       );
 
@@ -185,6 +206,8 @@ const supportController = {
           message: 'Support ticket not found'
         });
       }
+
+      const row = ticketCheck.rows[0];
 
       // Add the message
       const result = await pool.query(
@@ -199,6 +222,20 @@ const supportController = {
         'UPDATE support_tickets SET updated_at = NOW() WHERE id = $1',
         [ticketId]
       );
+
+      // Fire-and-forget notify admin. Never blocks / crashes the reply.
+      emailUserReplyToAdmin({
+        ticket: {
+          id: row.id,
+          ticket_number: row.ticket_number,
+          subject: row.subject,
+          category: row.category,
+          priority: row.priority,
+          status: row.status,
+        },
+        user: { id: row.uid, email: row.email, first_name: row.first_name, last_name: row.last_name, role: row.role },
+        messageText: message.trim(),
+      }).catch((err) => console.error('⚠️ user-reply email failed:', err.message));
 
       res.status(201).json({
         success: true,

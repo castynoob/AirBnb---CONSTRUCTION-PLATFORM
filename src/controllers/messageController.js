@@ -1,5 +1,100 @@
 import messageModel from '../models/messageModel.js';
 import pool from '../config/db.js';
+import { sendEmail } from '../services/mailerService.js';
+
+// Truncate a message body to a safe preview length for the email subject/body.
+// Strips newlines and collapses whitespace so the preview reads as a single line.
+const previewText = (raw, max = 140) => {
+  if (!raw) return '';
+  const flat = String(raw).replace(/\s+/g, ' ').trim();
+  return flat.length > max ? flat.slice(0, max - 1) + '…' : flat;
+};
+
+// HTML-escape a string for safe inclusion in the email HTML body. Message
+// bodies are arbitrary user input; without escaping, `<script>` etc. would land
+// in the recipient's inbox as live markup.
+const escapeHtml = (s) => String(s ?? '')
+  .replace(/&/g, '&amp;')
+  .replace(/</g, '&lt;')
+  .replace(/>/g, '&gt;')
+  .replace(/"/g, '&quot;')
+  .replace(/'/g, '&#39;');
+
+// Fire-and-forget email dispatch on every new chat message. Runs after the
+// message has been persisted + socket-broadcast, so a mailer failure never
+// blocks the API response.
+//
+// Guards:
+//   * Recipient must have users.email_notifications = TRUE.
+//   * Recipient must have a non-empty email address.
+//   * No throttle — user explicitly asked "email every time".
+const dispatchMessageEmail = async ({ senderId, receiverId, message, jobId }) => {
+  try {
+    const { rows } = await pool.query(
+      `SELECT
+         r.email          AS to_email,
+         r.first_name     AS to_first,
+         r.last_name      AS to_last,
+         r.email_notifications AS to_opt_in,
+         s.first_name     AS from_first,
+         s.last_name      AS from_last,
+         COALESCE(mp.company_name, ep.company_name, NULL) AS from_company,
+         j.title          AS job_title
+       FROM users r
+       CROSS JOIN users s
+       LEFT JOIN manager_profiles      mp ON mp.user_id = s.id
+       LEFT JOIN entrepreneur_profiles ep ON ep.user_id = s.id
+       LEFT JOIN jobs j ON j.id = $3
+       WHERE r.id = $1 AND s.id = $2`,
+      [receiverId, senderId, jobId || null]
+    );
+    const row = rows[0];
+    if (!row) return;
+    if (row.to_opt_in === false) return;         // opted out
+    if (!row.to_email) return;                    // no address on file
+
+    const senderName =
+      row.from_company ||
+      [row.from_first, row.from_last].filter(Boolean).join(' ') ||
+      'Someone';
+    const recipientName = row.to_first || row.to_last || 'there';
+    const messagePreview = previewText(message.content, 140);
+    const inboxUrl = `${process.env.FRONTEND_URL || ''}/messages`;
+
+    const subject = row.job_title
+      ? `New message from ${senderName} — ${row.job_title}`
+      : `New message from ${senderName}`;
+
+    const text = [
+      `Hi ${recipientName},`,
+      '',
+      `${senderName} just sent you a message${row.job_title ? ` about "${row.job_title}"` : ''} on Intervos:`,
+      '',
+      messagePreview || '(sent an attachment)',
+      '',
+      inboxUrl ? `Reply here: ${inboxUrl}` : '',
+      '',
+      '— Intervos',
+    ].filter(Boolean).join('\n');
+
+    const html = `
+      <div style="font-family:system-ui,-apple-system,'Segoe UI',sans-serif;max-width:560px;margin:0 auto;color:#0f223d;">
+        <p>Hi ${escapeHtml(recipientName)},</p>
+        <p><strong>${escapeHtml(senderName)}</strong> just sent you a message${row.job_title ? ` about <em>${escapeHtml(row.job_title)}</em>` : ''} on Intervos:</p>
+        <blockquote style="margin:12px 0;padding:12px 16px;border-left:4px solid #00A5A9;background:#f4fafa;border-radius:6px;font-size:15px;line-height:1.5;">
+          ${messagePreview ? escapeHtml(messagePreview) : '<em>(sent an attachment)</em>'}
+        </blockquote>
+        ${inboxUrl ? `<p style="margin-top:24px"><a href="${inboxUrl}" style="display:inline-block;background:#00A5A9;color:#fff;padding:10px 20px;border-radius:8px;text-decoration:none;font-weight:600;">Open your inbox</a></p>` : ''}
+        <p style="margin-top:32px;color:#6b7280;font-size:12px;">You're receiving this because email notifications are enabled on your Intervos account. You can turn them off in your profile settings.</p>
+      </div>
+    `;
+
+    await sendEmail(row.to_email, subject, text, html);
+  } catch (err) {
+    // Never let a mail error surface — the message API already succeeded.
+    console.error('⚠️ Message-email dispatch failed:', err.message);
+  }
+};
 
 const messageController = {
   // ============================================
@@ -122,6 +217,11 @@ const messageController = {
           conversationId: conversation.id
         });
       }
+
+      // Fire-and-forget email notification — respects the recipient's
+      // users.email_notifications preference. Not awaited: any mailer hiccup
+      // must not block the API response.
+      dispatchMessageEmail({ senderId, receiverId, message, jobId });
 
       res.status(201).json({
         success: true,

@@ -2,6 +2,12 @@
 import pool from "../config/db.js";
 import { uploadToSupabase, deleteFromSupabase, getPublicUrl, extractFilePathFromUrl, generateUniqueFileName } from '../utils/supabaseHelpers.js';
 import { BUCKETS } from '../config/supabase.js';
+import {
+  validateRBQLicense,
+  persistRBQResult,
+  isRBQValidationEnabled,
+  normaliseRBQLicense,
+} from "../services/rbqValidationService.js";
 
 // Existing controllers (keep them)
 export const getProfile = async (req, res) => {
@@ -592,7 +598,10 @@ export const updateEntrepreneurProfile = async (req, res) => {
       service_area,
       insurance_provider,
       insurance_expiry,
-      portfolio
+      portfolio,
+      showcase_enabled,
+      bio,
+      website,
     } = req.body;
 
     // Validate required fields
@@ -603,9 +612,11 @@ export const updateEntrepreneurProfile = async (req, res) => {
       });
     }
 
-    // Check if entrepreneur profile exists
+    // Check if entrepreneur profile exists — also grab current license_number
+    // so we can decide whether the RBQ check needs to re-run (only when the
+    // number actually changed) and whether we should persist a fresh result.
     const entrepreneurCheck = await pool.query(
-      'SELECT id FROM entrepreneur_profiles WHERE user_id = $1',
+      'SELECT id, license_number FROM entrepreneur_profiles WHERE user_id = $1',
       [userId]
     );
 
@@ -615,7 +626,76 @@ export const updateEntrepreneurProfile = async (req, res) => {
       });
     }
 
-    // Update entrepreneur profile
+    const profileId = entrepreneurCheck.rows[0].id;
+    const currentLicense = entrepreneurCheck.rows[0].license_number;
+    const licenseChanged = String(license_number).trim() !== String(currentLicense || '').trim();
+
+    // -----------------------------------------------------------------
+    // Duplicate license gate — another entrepreneur mustn't already own
+    // this licence number. Only runs when the licence actually changed;
+    // excludes the current profile so re-saving your own is fine.
+    // -----------------------------------------------------------------
+    if (licenseChanged) {
+      const dupCheck = await pool.query(
+        'SELECT id FROM entrepreneur_profiles WHERE license_number = $1 AND id <> $2 LIMIT 1',
+        [license_number, profileId]
+      );
+      if (dupCheck.rows.length > 0) {
+        return res.status(400).json({
+          code: 'duplicate_license',
+          message: 'This licence number is already registered to another contractor.',
+        });
+      }
+    }
+
+    // -----------------------------------------------------------------
+    // RBQ license gate on profile edit — mirrors the registration flow.
+    // Only runs when the licence number actually changed AND the feature
+    // flag is on (so the check is off in dev / while the vendor is being
+    // finalised). Unchanged licences are trusted; the periodic admin
+    // recheck endpoint handles staleness.
+    // -----------------------------------------------------------------
+    let rbqResult = null;
+    if (licenseChanged && isRBQValidationEnabled()) {
+      if (!normaliseRBQLicense(license_number)) {
+        return res.status(400).json({
+          code: 'rbq_format',
+          message: 'The RBQ license must be 10 digits, formatted as NNNN-NNNN-NN.',
+        });
+      }
+      rbqResult = await validateRBQLicense(license_number);
+      if (!rbqResult.ok) {
+        return res.status(400).json({
+          code: rbqResult.reason === 'unavailable' ? 'rbq_unavailable' : 'rbq_error',
+          message:
+            rbqResult.reason === 'unavailable'
+              ? "We couldn't reach the RBQ registry to verify your licence. Please try again in a few minutes."
+              : 'RBQ licence check failed. Please double-check your licence number and try again.',
+        });
+      }
+      if (rbqResult.status === 'invalid') {
+        return res.status(400).json({
+          code: 'rbq_invalid',
+          message: 'The RBQ registry has no record of this licence number. Please verify and try again.',
+        });
+      }
+      if (rbqResult.status === 'restricted') {
+        return res.status(400).json({
+          code: 'rbq_restricted',
+          message:
+            'This RBQ licence has active restrictions and cannot be saved. Contact support if you believe this is a mistake.',
+          restrictions: rbqResult.restrictions || [],
+        });
+      }
+    }
+
+    // Update entrepreneur profile. `showcase_enabled` is optional — when
+    // omitted (older clients / partial patches) COALESCE keeps the current
+    // value. Boolean coerced explicitly so "true"/"false" strings from
+    // form-serialisation don't slip through as truthy strings.
+    const showcase =
+      showcase_enabled === undefined ? null
+      : (showcase_enabled === true || showcase_enabled === "true");
     const updateResult = await pool.query(
       `UPDATE entrepreneur_profiles
        SET company_name = $1,
@@ -628,9 +708,12 @@ export const updateEntrepreneurProfile = async (req, res) => {
            service_area = $8,
            insurance_provider = $9,
            insurance_expiry = $10,
-           portfolio = $11,
+           portfolio = COALESCE($11, portfolio),
+           showcase_enabled = COALESCE($12, showcase_enabled),
+           bio     = COALESCE($13, bio),
+           website = COALESCE($14, website),
            updated_at = NOW()
-       WHERE user_id = $12
+       WHERE user_id = $15
        RETURNING *`,
       [
         company_name,
@@ -643,10 +726,29 @@ export const updateEntrepreneurProfile = async (req, res) => {
         service_area || null,
         insurance_provider || null,
         insurance_expiry || null,
-        portfolio ? JSON.stringify(portfolio) : null,
+        // NULL when omitted so COALESCE keeps the existing portfolio. Without
+        // this, the profile PUT wipes any photos the standalone uploader
+        // endpoints just added — a nasty race the user reported after the
+        // showcase toggle went live.
+        portfolio === undefined ? null : JSON.stringify(portfolio),
+        showcase,
+        // bio / website: null when omitted (COALESCE keeps existing).
+        // Empty string is treated as "clear it" per the schema — allowed.
+        bio === undefined ? null : bio,
+        website === undefined ? null : website,
         userId
       ]
     );
+
+    // Persist RBQ result so the badge, admin dashboard, and manager view all
+    // pick up the fresh status. Non-fatal on failure — the profile was saved.
+    if (rbqResult) {
+      try {
+        await persistRBQResult(profileId, rbqResult);
+      } catch (persistErr) {
+        console.error('⚠️ RBQ persist failed (profile update continues):', persistErr.message);
+      }
+    }
 
     console.log(`[Update] ✓ Entrepreneur profile updated: ${userId}`);
 
@@ -882,10 +984,25 @@ export const addPortfolioPhoto = async (req, res) => {
 
     const fileUrl = getPublicUrl(BUCKETS.PROFILE_IMAGES, uploadResult.data.path);
 
-    // Append new entry to portfolio
+    // Append new entry to portfolio. Every entry gets a stable id so the UI
+    // can link before/after pairs and edit metadata later without relying on
+    // fragile array indexes.
+    //
+    // Rich metadata (all optional):
+    //   - caption:    short line describing the work
+    //   - trade_tag:  which specialization this photo belongs to (e.g. "carpentry")
+    //   - is_before:  true if this is the "before" side of a before/after pair
+    //   - pair_id:    id of the paired entry when part of a before/after set
+    //
+    // Multer's text fields arrive as strings, so we coerce is_before manually.
+    const crypto = await import("node:crypto");
     const newEntry = {
+      id: crypto.randomUUID(),
       url: fileUrl,
       caption: req.body.caption || '',
+      trade_tag: req.body.trade_tag || null,
+      is_before: req.body.is_before === "true" || req.body.is_before === true,
+      pair_id: req.body.pair_id || null,
       uploaded_at: new Date().toISOString()
     };
     const updatedPortfolio = [...currentPortfolio, newEntry];
@@ -977,6 +1094,73 @@ export const removePortfolioPhoto = async (req, res) => {
       message: 'Server error',
       error: error.message
     });
+  }
+};
+
+/**
+ * Update Portfolio Photo metadata (caption / trade_tag / is_before / pair_id)
+ * PATCH /api/users/entrepreneur-profile/portfolio/:photoId
+ *
+ * Edits an existing portfolio entry in place — does not re-upload the file.
+ * `photoId` matches the `id` field on the JSON entry (added at upload time).
+ * Older entries without an `id` can still be edited by index via
+ * `?byIndex=true` on the URL and passing an integer as photoId; that path is
+ * a compat escape hatch for pre-upgrade rows.
+ */
+export const updatePortfolioPhoto = async (req, res) => {
+  try {
+    const userId = req.user.id;
+    const { photoId } = req.params;
+    const byIndex = String(req.query.byIndex || '').toLowerCase() === 'true';
+
+    const entrepreneurCheck = await pool.query(
+      'SELECT id, portfolio FROM entrepreneur_profiles WHERE user_id = $1',
+      [userId]
+    );
+    if (entrepreneurCheck.rows.length === 0) {
+      return res.status(404).json({ message: 'Entrepreneur profile not found' });
+    }
+
+    const currentPortfolio = entrepreneurCheck.rows[0].portfolio || [];
+    let idx = -1;
+    if (byIndex) {
+      const parsed = parseInt(photoId, 10);
+      if (!Number.isNaN(parsed) && parsed >= 0 && parsed < currentPortfolio.length) idx = parsed;
+    } else {
+      idx = currentPortfolio.findIndex((p) => p && p.id === photoId);
+    }
+    if (idx === -1) {
+      return res.status(404).json({ message: 'Portfolio entry not found' });
+    }
+
+    // Whitelist of editable fields. Never let clients rewrite url / uploaded_at.
+    const patch = {};
+    if (Object.prototype.hasOwnProperty.call(req.body, 'caption'))   patch.caption   = String(req.body.caption || '');
+    if (Object.prototype.hasOwnProperty.call(req.body, 'trade_tag')) patch.trade_tag = req.body.trade_tag || null;
+    if (Object.prototype.hasOwnProperty.call(req.body, 'is_before')) patch.is_before = req.body.is_before === true || req.body.is_before === 'true';
+    if (Object.prototype.hasOwnProperty.call(req.body, 'pair_id'))   patch.pair_id   = req.body.pair_id || null;
+
+    // Backfill an id for legacy entries so future edits/pairings can target it.
+    const crypto = await import('node:crypto');
+    const updated = { ...currentPortfolio[idx], ...patch };
+    if (!updated.id) updated.id = crypto.randomUUID();
+
+    const updatedPortfolio = [...currentPortfolio];
+    updatedPortfolio[idx] = updated;
+
+    const updateResult = await pool.query(
+      'UPDATE entrepreneur_profiles SET portfolio = $1, updated_at = NOW() WHERE user_id = $2 RETURNING portfolio',
+      [JSON.stringify(updatedPortfolio), userId]
+    );
+
+    return res.json({
+      message: 'Portfolio entry updated',
+      entry: updated,
+      portfolio: updateResult.rows[0].portfolio,
+    });
+  } catch (error) {
+    console.error('[Update] Portfolio photo error:', error);
+    return res.status(500).json({ message: 'Server error', error: error.message });
   }
 };
 

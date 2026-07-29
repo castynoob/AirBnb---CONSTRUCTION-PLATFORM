@@ -5,6 +5,7 @@ import { uploadToSupabase, deleteFromSupabase, getPublicUrl, extractFilePathFrom
 import { BUCKETS } from '../config/supabase.js';
 import { getIO } from "../config/socketSetup.js";
 import { createNotification } from "./notificationController.js";
+import * as cache from "../config/cache.js";
 import {
   createUserActivityLog,
   ActivityActions,
@@ -39,6 +40,18 @@ export const createJob = async (req, res) => {
     const jobData = { ...req.body, manager_id };
 
     const newJob = await Job.createJob(jobData);
+
+    // Bust every cached view of this manager's job list. Without this, the
+    // 5-minute cacheMiddleware on GET /api/jobs/manager/:id will keep serving
+    // the pre-create list, so the new job doesn't appear until the cache TTL
+    // expires. delPattern matches `jobs:all`, `jobs:by-manager:<id>`, and
+    // `jobs:by-entrepreneur:<id>` (which powers contractor feeds), plus the
+    // single-job read key.
+    try {
+      await cache.delPattern("jobs:*");
+    } catch (cacheErr) {
+      console.warn("⚠️ Job creation cache invalidation failed:", cacheErr.message);
+    }
 
     // Log user activity
     const ipAddress = req.ip || req.headers['x-forwarded-for'] || req.connection?.remoteAddress;
@@ -115,6 +128,10 @@ export const updateJob = async (req, res) => {
     if (!updatedJob) {
       return res.status(404).json({ message: "Job not found" });
     }
+
+    // Bust cached job lists — status changes, edits, etc. must be visible
+    // immediately in the manager dashboard and contractor feeds.
+    try { await cache.delPattern("jobs:*"); } catch (_) {}
 
     // Log user activity for job update
     const ipAddress = req.ip || req.headers['x-forwarded-for'] || req.connection?.remoteAddress;
@@ -337,6 +354,9 @@ export const deleteJob = async (req, res) => {
     // Delete the job (CASCADE handles bids, images, etc.)
     await Job.deleteJob(jobId);
 
+    // Bust cached job lists so the deletion is visible immediately.
+    try { await cache.delPattern("jobs:*"); } catch (_) {}
+
     // Log user activity
     const ipAddress = req.ip || req.headers['x-forwarded-for'] || req.connection?.remoteAddress;
     const userAgent = req.headers['user-agent'];
@@ -439,6 +459,69 @@ export const getJobsByManagerId = async (req, res) => {
     });
   } catch (err) {
     console.error("❌ Error fetching jobs by manager ID:", err);
+    res.status(500).json({ message: "Server error" });
+  }
+};
+
+
+/**
+ * 🚀 Manager dashboard feed — paginated + fully enriched in ONE round-trip.
+ *
+ * GET /api/jobs/manager/:manager_id/dashboard?cursor=...&limit=20
+ *
+ * Replaces the old client-side fan-out. Response shape:
+ *   {
+ *     jobs: [...enriched...],
+ *     hasMore: boolean,
+ *     nextCursor: string | null,
+ *   }
+ *
+ * `manager_id` on the URL is USER id (matches the existing endpoint's
+ * convention). We resolve it to manager_profiles.id inside.
+ */
+export const getManagerDashboard = async (req, res) => {
+  try {
+    const { manager_id } = req.params;
+    const limit = Math.min(Math.max(parseInt(req.query.limit, 10) || 20, 1), 100);
+    const rawCursor = req.query.cursor || null;
+
+    let cursorCreatedAt = null;
+    let cursorId = null;
+    if (rawCursor) {
+      try {
+        const decoded = Buffer.from(rawCursor, "base64").toString("utf8");
+        const sep = decoded.lastIndexOf("|");
+        if (sep > 0) {
+          cursorCreatedAt = decoded.slice(0, sep);
+          cursorId = decoded.slice(sep + 1);
+        }
+      } catch {
+        // Malformed cursor is treated as no cursor rather than a 400 — bad
+        // clients just get the first page.
+      }
+    }
+
+    const managerExists = await pool.query(
+      `SELECT id FROM manager_profiles WHERE user_id = $1`,
+      [manager_id]
+    );
+    if (!managerExists.rows[0]) {
+      return res.status(404).json({ message: "Manager profile not found" });
+    }
+
+    const { rows, hasMore, nextCursor } = await Job.getManagerDashboardJobs(
+      managerExists.rows[0].id,
+      { limit, cursorCreatedAt, cursorId }
+    );
+
+    res.json({
+      jobs: rows,
+      hasMore,
+      nextCursor,
+      count: rows.length,
+    });
+  } catch (err) {
+    console.error("❌ Error fetching manager dashboard:", err);
     res.status(500).json({ message: "Server error" });
   }
 };

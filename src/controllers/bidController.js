@@ -281,6 +281,7 @@ export const getManagerSubmissions = async (req, res) => {
         -- Bid data
         b.id AS bid_id, b.job_id AS bid_job_id, b.entrepreneur_id, b.amount AS bid_amount,
         b.message AS bid_message, b.status AS bid_status,
+        b.timeline_days AS bid_timeline_days,
         b.created_at AS bid_created_at, b.updated_at AS bid_updated_at,
 
         -- Job data
@@ -392,6 +393,10 @@ export const getManagerSubmissions = async (req, res) => {
         amount: row.bid_amount,
         message: row.bid_message,
         status: row.bid_status,
+        // Entrepreneur's proposed delivery timeline (from the bid form). Was
+        // missing here previously, which is why the manager's Bid Details modal
+        // showed "N/A jours" even when the contractor entered a value.
+        timeline_days: row.bid_timeline_days,
         created_at: row.bid_created_at,
         updated_at: row.bid_updated_at,
       },
@@ -479,12 +484,16 @@ export const getManagerSubmissions = async (req, res) => {
       } : null,
     }));
 
-    // Also return status counts in one query
+    // Also return status counts in one query. Each bucket must match what
+    // the frontend tab actually shows: the client filters on job.status, so
+    // the counts filter on job.status too (previously `approved` counted
+    // every b.status = 'approved' row regardless of where the job was in
+    // its lifecycle — leaving stale +1s on tabs whose list was empty).
     const countsResult = await pool.query(
       `SELECT
         COUNT(*) FILTER (WHERE b.status != 'declined') AS total,
         COUNT(*) FILTER (WHERE b.status = 'pending') AS open,
-        COUNT(*) FILTER (WHERE b.status = 'approved') AS approved,
+        COUNT(*) FILTER (WHERE j.status = 'accepted' AND b.status = 'approved') AS approved,
         COUNT(*) FILTER (WHERE j.status = 'ongoing' AND b.status = 'approved') AS ongoing,
         COUNT(*) FILTER (WHERE j.status = 'completed' AND b.status = 'approved') AS completed,
         COUNT(*) FILTER (WHERE j.is_archived = true AND b.status != 'declined') AS archived
@@ -606,6 +615,26 @@ export const approveBid = async (req, res) => {
 
     if (bid.status === 'approved') {
       return res.status(400).json({ message: "Bid is already approved" });
+    }
+
+    // Approval guard: refuse to approve while there are pending addenda.
+    // The PM must accept or reject each proposed price adjustment first,
+    // otherwise the "approved amount" is ambiguous.
+    try {
+      const { hasPendingAddenda, getEffectiveBidAmount } = await import("../models/bidAddendaModel.js");
+      if (await hasPendingAddenda(id)) {
+        const eff = await getEffectiveBidAmount(id);
+        return res.status(400).json({
+          code: "pending_addenda",
+          message:
+            "This bid has pending addenda that need a decision first. Accept or reject them before approving the bid.",
+          pending_count: eff?.pendingCount || 1,
+        });
+      }
+    } catch (guardErr) {
+      // Guard failure shouldn't block approval — log and continue so PMs
+      // aren't stranded by an unrelated addenda-table issue.
+      console.error("⚠️ Addenda approval guard skipped:", guardErr.message);
     }
 
     const managerProfile = await pool.query(

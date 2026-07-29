@@ -16,6 +16,7 @@ export const createProperty = async ({
   building_name = null,
   latitude = null,
   longitude = null,
+  condo_control_email = null,
 }) => {
   const result = await pool.query(
     `INSERT INTO properties (
@@ -29,21 +30,23 @@ export const createProperty = async ({
       building_type,
       building_name,
       latitude,
-      longitude
-    ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11)
+      longitude,
+      condo_control_email
+    ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12)
     RETURNING *`,
     [
-      manager_id,       // $1
-      admin_owner_id,   // $2
-      address,          // $3
-      city,             // $4
-      province,         // $5
-      postal_code,      // $6
-      num_units,        // $7
-      building_type,    // $8
-      building_name,    // $9
-      latitude,         // $10
-      longitude,        // $11
+      manager_id,          // $1
+      admin_owner_id,      // $2
+      address,             // $3
+      city,                // $4
+      province,            // $5
+      postal_code,         // $6
+      num_units,           // $7
+      building_type,       // $8
+      building_name,       // $9
+      latitude,            // $10
+      longitude,           // $11
+      condo_control_email, // $12
     ]
   );
 
@@ -102,6 +105,7 @@ export const updateProperty = async (id, fields) => {
     "building_name",
     "latitude",
     "longitude",
+    "condo_control_email",
   ];
 
   const filteredFields = {};

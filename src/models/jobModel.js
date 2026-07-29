@@ -19,6 +19,11 @@ export const createJob = async ({
   is_emergency = false,
   status = "Open",
 }) => {
+  // HTML forms submit "" for empty date/number inputs — Postgres rejects those
+  // with 22007 on `date` columns and 22P02 on `integer`. Coerce blank strings
+  // to null so optional fields save cleanly.
+  const nullIfBlank = (v) => (v === "" || v === undefined ? null : v);
+
   const result = await pool.query(
     `INSERT INTO jobs (
       property_id, manager_id, admin_owner_id, title, description, category, urgency,
@@ -35,8 +40,8 @@ export const createJob = async ({
       description,
       category,
       urgency,
-      due_date,
-      estimated_duration_days,
+      nullIfBlank(due_date),
+      nullIfBlank(estimated_duration_days),
       budget_min,
       budget_max,
       is_budget_hidden,
@@ -48,9 +53,19 @@ export const createJob = async ({
   return result.rows[0];
 };
 
-// 🟡 Get all jobs
+// 🟡 Get all jobs (contractor-facing feed).
+// Exclude resident-raised requests that are still pending PM approval or
+// were rejected/withdrawn — those live in `jobs` for the audit trail but
+// mustn't leak into the contractor discovery feed. Approved requests slip
+// through because their `resident_request_status` is 'approved' (allowed).
 export const getAllJobs = async () => {
-  const result = await pool.query(`SELECT * FROM jobs WHERE (is_archived = false OR is_archived IS NULL) ORDER BY created_at DESC`);
+  const result = await pool.query(
+    `SELECT * FROM jobs
+      WHERE (is_archived = false OR is_archived IS NULL)
+        AND (resident_request_status IS NULL
+             OR resident_request_status = 'approved')
+      ORDER BY created_at DESC`
+  );
   return result.rows;
 };
 
@@ -108,8 +123,18 @@ export const updateJob = async (id, fields) => {
   const keys = Object.keys(fields);
   if (keys.length === 0) return null;
 
+  // Same defensive coercion as createJob — blank string from the edit form on
+  // a date/int column would otherwise 22007/22P02. Applied to nullable typed
+  // columns only; leaves text/varchar untouched.
+  const nullIfBlank = (v) => (v === "" ? null : v);
+  const NULLABLE_TYPED = new Set(["due_date", "estimated_duration_days"]);
+  const coerced = { ...fields };
+  for (const k of Object.keys(coerced)) {
+    if (NULLABLE_TYPED.has(k)) coerced[k] = nullIfBlank(coerced[k]);
+  }
+
   const setQuery = keys.map((key, idx) => `${key} = $${idx + 2}`).join(", ");
-  const values = [id, ...Object.values(fields)];
+  const values = [id, ...keys.map((k) => coerced[k])];
 
   const result = await pool.query(
     `UPDATE jobs SET ${setQuery}, updated_at = NOW() WHERE id = $1 RETURNING *`,
@@ -130,11 +155,114 @@ export const getJobsByManagerId = async (manager_id) => {
     `SELECT j.*,
             (SELECT i.image_url FROM images i WHERE i.job_id = j.id ORDER BY i.created_at ASC LIMIT 1) as job_image
      FROM jobs j
-     WHERE j.manager_id = $1 AND (j.is_archived = false OR j.is_archived IS NULL)
+     WHERE j.manager_id = $1
+       AND (j.is_archived = false OR j.is_archived IS NULL)
+       -- Exclude unapproved resident-raised requests; the PM reviews those in
+       -- the /repairs/pending queue, not here.
+       AND (j.resident_request_status IS NULL
+            OR j.resident_request_status = 'approved')
      ORDER BY j.created_at DESC`,
     [manager_id]
   );
   return result.rows;
+};
+
+/**
+ * 🚀 Paginated + fully-enriched manager dashboard feed.
+ *
+ * Replaces the old client-side N+1 fan-out (~2N+P HTTP requests) with a
+ * SINGLE SQL query that JOINs property + bid stats + first image per job.
+ * Cursor pagination uses (created_at, id) so we get deterministic pages
+ * even when many jobs share the same second-precision timestamp.
+ *
+ * Returns { rows, hasMore, nextCursor }.
+ *
+ * `cursor` is an opaque base64 encoding of "<iso-created-at>|<uuid>"; the
+ * controller opaque-serializes it so callers don't build coupled URLs.
+ */
+export const getManagerDashboardJobs = async (
+  manager_id,
+  { limit = 20, cursorCreatedAt = null, cursorId = null } = {}
+) => {
+  const params = [manager_id];
+  let cursorClause = "";
+  if (cursorCreatedAt && cursorId) {
+    // Row-wise comparison — jobs strictly older than the last row of the
+    // previous page, breaking ties by id so we never skip or double-count.
+    params.push(cursorCreatedAt);
+    params.push(cursorId);
+    cursorClause = `AND (j.created_at, j.id) < ($${params.length - 1}, $${params.length})`;
+  }
+  // Ask for limit+1 so the caller can tell whether another page exists
+  // without needing a separate COUNT.
+  params.push(limit + 1);
+
+  const result = await pool.query(
+    `
+    SELECT
+      j.id, j.title, j.description, j.category, j.urgency,
+      j.status, j.budget_min, j.budget_max,
+      j.is_budget_hidden, j.is_emergency,
+      j.due_date, j.estimated_duration_days, j.property_id,
+      j.manager_id, j.unit_id, j.admin_owner_id,
+      j.created_at, j.updated_at,
+
+      -- Property (JOIN, deduped once instead of N frontend fetches)
+      p.building_name  AS property_name,
+      p.address        AS property_address,
+      p.city           AS property_city,
+      p.province       AS property_province,
+      p.postal_code    AS property_postal_code,
+      p.building_type  AS property_type,
+      p.num_units      AS property_units,
+      p.latitude       AS property_lat,
+      p.longitude      AS property_lng,
+      p.image          AS property_image,
+
+      -- Bid stats via LATERAL — one row per job, cheap on the index
+      COALESCE(bs.total_bids, 0)::int      AS bid_count,
+      COALESCE(bs.approved_bids, 0)::int   AS approved_bid_count,
+
+      -- First image URL only. Full gallery is fetched on demand when the
+      -- manager opens the job details page — dashboard cards don't need it.
+      (SELECT i.image_url
+         FROM images i
+        WHERE i.job_id = j.id
+        ORDER BY i.created_at ASC
+        LIMIT 1)                            AS job_image
+
+    FROM jobs j
+    LEFT JOIN properties p ON p.id = j.property_id
+    LEFT JOIN LATERAL (
+      SELECT
+        COUNT(*)::int                                                            AS total_bids,
+        COUNT(*) FILTER (WHERE b.status IN ('approved', 'accepted'))::int        AS approved_bids
+      FROM bids b
+      WHERE b.job_id = j.id
+    ) bs ON true
+    WHERE j.manager_id = $1
+      AND (j.is_archived = false OR j.is_archived IS NULL)
+      -- Exclude resident-raised requests that haven't been approved yet.
+      -- The PM's dedicated /repairs/pending queue owns triage; the dashboard
+      -- is for jobs actually in flight. NULL = PM-authored jobs (unchanged).
+      AND (j.resident_request_status IS NULL
+           OR j.resident_request_status = 'approved')
+      ${cursorClause}
+    ORDER BY j.created_at DESC, j.id DESC
+    LIMIT $${params.length}
+    `,
+    params
+  );
+
+  const rows = result.rows;
+  const hasMore = rows.length > limit;
+  const page = hasMore ? rows.slice(0, limit) : rows;
+  const last = page[page.length - 1];
+  const nextCursor = hasMore && last
+    ? Buffer.from(`${last.created_at.toISOString()}|${last.id}`).toString("base64")
+    : null;
+
+  return { rows: page, hasMore, nextCursor };
 };
 
 // 📦 Get archived jobs by manager ID

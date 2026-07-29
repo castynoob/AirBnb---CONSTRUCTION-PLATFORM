@@ -24,7 +24,8 @@ import {
   updateEmailNotificationPreference,
   uploadInsuranceProof,
   addPortfolioPhoto,
-  removePortfolioPhoto
+  removePortfolioPhoto,
+  updatePortfolioPhoto
 } from "../controllers/userController.js";
 import { uploadImage, handleUploadError } from "../middleware/uploadMiddleware.js";
 import { authorizeRoles } from "../middleware/roleMiddleware.js";
@@ -200,6 +201,17 @@ router.delete(
   authorizeRoles("entrepreneur"),
   invalidateCache((req) => [USER_KEYS.profile(req.user.id), USER_KEYS.entrepreneur(req.user.id)]),
   removePortfolioPhoto
+);
+
+// Update Portfolio Photo metadata (caption / trade_tag / is_before / pair_id).
+// `photoId` = the entry's stable id. For pre-upgrade rows without an id, add
+// `?byIndex=true` and pass the array index.
+router.patch(
+  "/entrepreneur-profile/portfolio/:photoId",
+  authenticateToken,
+  authorizeRoles("entrepreneur"),
+  invalidateCache((req) => [USER_KEYS.profile(req.user.id), USER_KEYS.entrepreneur(req.user.id)]),
+  updatePortfolioPhoto
 );
 
 // Update User Phone Number

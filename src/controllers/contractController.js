@@ -68,7 +68,20 @@ const ContractController = {
       }
 
       // Get contract amount from bid
-      const contractAmount = parseFloat(bid.amount);
+      // Contract amount = original bid amount + all ACCEPTED addenda deltas.
+      // This makes accepted price adjustments the source of truth at contract
+      // creation. `bids.amount` is preserved as the original submission (audit
+      // trail); `contracts.contract_amount` reflects the negotiated total.
+      let contractAmount = parseFloat(bid.amount);
+      try {
+        const { getEffectiveBidAmount } = await import("../models/bidAddendaModel.js");
+        const eff = await getEffectiveBidAmount(bid_id);
+        if (eff && Number.isFinite(eff.effectiveAmount)) {
+          contractAmount = Number(eff.effectiveAmount);
+        }
+      } catch (addendaErr) {
+        console.warn("⚠️ Addenda lookup skipped, using original bid amount:", addendaErr.message);
+      }
 
       // Create contract - payments are handled externally
       const contractResult = await pool.query(
