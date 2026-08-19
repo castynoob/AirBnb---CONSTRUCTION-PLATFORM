@@ -14,14 +14,19 @@ import {
   acceptInvite,
   declineInvite,
   searchResidents,
+  downloadImportTemplate,
+  bulkImportResidents,
 } from "../controllers/propertyResidentController.js";
 import { authenticateToken } from "../middleware/authMiddleware.js";
 import { authorizeRoles } from "../middleware/roleMiddleware.js";
+import { uploadExcel, handleUploadError } from "../middleware/uploadMiddleware.js";
 
 // PM-side router — nested under a specific property id (mergeParams so the
 // controller sees :propertyId).
 export const pmRouter = express.Router({ mergeParams: true });
 pmRouter.get(   "/",                      authenticateToken, authorizeRoles("property_manager"), listResidents);
+pmRouter.get(   "/import-template",       authenticateToken, authorizeRoles("property_manager"), downloadImportTemplate);
+pmRouter.post(  "/bulk-import",           authenticateToken, authorizeRoles("property_manager"), uploadExcel, handleUploadError, bulkImportResidents);
 pmRouter.post(  "/invite",                authenticateToken, authorizeRoles("property_manager"), inviteResident);
 pmRouter.delete("/invites/:inviteId",     authenticateToken, authorizeRoles("property_manager"), cancelInvite);
 pmRouter.delete("/:userId",               authenticateToken, authorizeRoles("property_manager"), removeResident);

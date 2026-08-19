@@ -312,6 +312,10 @@ export const parseInspectionExcel = (fileBuffer) => {
         }
 
         // Parse and validate data
+        // English template has a single Budget column — duplicate it into
+        // budget_min AND budget_max so the preview modal doesn't fire the
+        // "missing budget" toast.
+        const budget = parseBudget(mappedRow.budget);
         const job = {
           title: mappedRow.title.toString().trim(),
           description: mappedRow.description
@@ -319,7 +323,9 @@ export const parseInspectionExcel = (fileBuffer) => {
             : '',
           category: parseCategory(mappedRow.category),
           urgency: parseUrgency(mappedRow.urgency),
-          budget: parseBudget(mappedRow.budget),
+          budget: budget,
+          budget_min: budget && budget > 0 ? budget : null,
+          budget_max: budget && budget > 0 ? budget : null,
           location: mappedRow.location ? mappedRow.location.toString().trim() : null,
           dueDate: parseDate(mappedRow.dueDate),
           notes: mappedRow.notes ? mappedRow.notes.toString().trim() : null,
@@ -364,6 +370,144 @@ export const parseInspectionExcel = (fileBuffer) => {
  * @param {string} language - 'en' for English, 'fr' for French (default: 'fr')
  * @returns {Buffer} Excel file buffer
  */
+// -----------------------------------------------------------------------------
+// Guide-sheet builders. Each language returns an array-of-arrays that
+// XLSX.utils.aoa_to_sheet turns into a readable second sheet. The content
+// mirrors the mini-guide pattern the residents template uses: legend, rules,
+// validation, defaults, valid values, field reference. Keeps everything the
+// syndicat owner needs to fill the file inside the file itself.
+// -----------------------------------------------------------------------------
+const buildInspectionGuideSheetFR = () => {
+  const aoa = [
+    ['Modèle Plan de maintien — guide de remplissage'],
+    [''],
+    // 1. Légende — même structure que le modèle des résidents et que
+    //    l\'exemple InEight fourni comme référence.
+    ['Légende'],
+    ['SYSTÈME',   'Champ généré par le système — laissez vide, nous le remplissons.'],
+    ['REQUIS',    'Champ obligatoire. Les lignes sans cette valeur seront rejetées.'],
+    ['OPTIONNEL', 'Champ facultatif. Laissez vide si non applicable.'],
+    ['IGNORÉ',    'Champ non lu à l\'importation. Toute valeur ici est ignorée.'],
+    [''],
+    // 2. Règles générales du modèle
+    ['Règles du modèle d\'importation'],
+    ['• Ne renommez pas les colonnes de la première feuille.'],
+    ['• Ne retirez ni ne réorganisez les colonnes.'],
+    ['• Toutes les lignes non vides seront traitées.'],
+    ['• Les lignes d\'exemple peuvent être supprimées ou remplacées.'],
+    ['• Les données générées par le système seront ignorées à l\'importation.'],
+    [''],
+    // 3. Validations & règles de données
+    ['Validations et règles de données'],
+    ['• Le Titre est requis (255 caractères max).'],
+    ['• Le format des dates est AAAA-MM-JJ (ex. 2026-11-15). Une année seule devient AAAA-12-31.'],
+    ['• Les montants sont numériques uniquement — pas de symbole $ ni de séparateurs.'],
+    ['• La catégorie et l\'urgence sont déduites par l\'IA si laissées vides.'],
+    ['• L\'analyse est faite par IA — les libellés en français comme en anglais sont acceptés.'],
+    [''],
+    // 4. Valeurs par défaut
+    ['Les valeurs par défaut suivantes sont appliquées si aucune valeur n\'est fournie'],
+    ['Champ',    'Valeur par défaut'],
+    ['Catégorie', 'Autre (déduite par l\'IA quand possible)'],
+    ['Urgence',   'Moyenne (déduite par l\'IA quand possible)'],
+    ['Statut',    'Ouvert'],
+    [''],
+    // 5. Comportement Mise à jour / Ajout
+    ['Comportement de mise à jour / ajout'],
+    ['• Chaque ligne crée un nouveau travail — il n\'y a pas de fusion avec des travaux existants.'],
+    ['• Après le téléversement, l\'IA lit chaque ligne et affiche un aperçu.'],
+    ['• Vous pouvez modifier ou retirer des travaux avant de les créer.'],
+    ['• Rien n\'est enregistré tant que vous n\'avez pas confirmé l\'aperçu.'],
+    [''],
+    // 6. Référence des colonnes
+    ['Colonnes attendues'],
+    ['Colonne',                        'Rôle',       'Description'],
+    ['Composante',                     'OPTIONNEL',  'Nom de la composante ou du système visé (ex. Toiture, CVAC, Plomberie).'],
+    ['Type de travaux',                'OPTIONNEL',  'Nature du travail (ex. Réparation, Remplacement, Entretien préventif).'],
+    ['Titre',                          'REQUIS',     'Titre court du travail (255 caractères max).'],
+    ['Description',                    'OPTIONNEL',  'Détails du travail à effectuer.'],
+    ['Coût actuel estimé',             'OPTIONNEL',  'Montant en dollars, sans symbole (ex. 15400).'],
+    ['Coût futur estimé après taxes',  'OPTIONNEL',  'Montant en dollars, sans symbole.'],
+    [''],
+    ['Valeurs valides pour la catégorie'],
+    ['Plomberie, Électricité, CVAC, Menuiserie, Peinture, Toiture, Revêtements de sol, Maçonnerie,'],
+    ['Aménagement paysager, Réparation générale, Démolition, Isolation, Cloisons sèches, Portes/Fenêtres,'],
+    ['Appareils, Autre'],
+    [''],
+    ['Valeurs valides pour l\'urgence'],
+    ['Faible, Moyenne, Élevée, Critique — ex. "urgence" → Critique, "planifié" → Faible.'],
+  ];
+  const ws = XLSX.utils.aoa_to_sheet(aoa);
+  ws['!cols'] = [{ wch: 34 }, { wch: 14 }, { wch: 70 }];
+  return ws;
+};
+
+const buildInspectionGuideSheetEN = () => {
+  const aoa = [
+    ['Inspection template — how to fill it in'],
+    [''],
+    // 1. Legend — mirrors the residents template and the InEight reference.
+    ['Legend'],
+    ['SYSTEM',   'Field generated by the system — leave blank, we fill it.'],
+    ['REQUIRED', 'Field is required. Rows missing this value will be rejected.'],
+    ['OPTIONAL', 'Field is optional. Leave blank if it does not apply.'],
+    ['IGNORED',  'Field is not read on import. Any value here is discarded.'],
+    [''],
+    // 2. Template rules
+    ['Import template rules'],
+    ['• Do not rename the columns on the first sheet.'],
+    ['• Do not remove or reorder columns.'],
+    ['• All non-empty rows will be processed.'],
+    ['• Example rows may be deleted or overwritten.'],
+    ['• System-generated data will be ignored on import.'],
+    [''],
+    // 3. Validations & data rules
+    ['Validations and data rules'],
+    ['• Job Title is required (max 255 characters).'],
+    ['• Dates must be in YYYY-MM-DD format (e.g. 2026-11-15). Year-only values become YYYY-12-31.'],
+    ['• Amounts are numeric only — no currency symbol or thousand separators.'],
+    ['• Category and Urgency are inferred by AI when left blank.'],
+    ['• Parsing is AI-powered — English and French headers both work.'],
+    [''],
+    // 4. Default values
+    ['The following default values will be applied if no value is provided'],
+    ['Field',    'Default value'],
+    ['Category', 'Other (inferred by AI when possible)'],
+    ['Urgency',  'Medium (inferred by AI when possible)'],
+    ['Status',   'Open'],
+    [''],
+    // 5. Update / Add behavior
+    ['Update / add behavior'],
+    ['• Every row creates a new job — there is no merge with existing jobs.'],
+    ['• After you upload, the AI reads each row and shows a preview.'],
+    ['• You can edit or remove any job before creating them.'],
+    ['• Nothing is saved until you confirm the preview.'],
+    [''],
+    // 6. Column reference
+    ['Expected columns'],
+    ['Column',      'Role',      'Description'],
+    ['Job Title',   'REQUIRED',  'Short job title (max 255 characters).'],
+    ['Description', 'OPTIONAL',  'Detailed work description.'],
+    ['Category',    'OPTIONAL',  'One of the valid categories below (inferred if blank).'],
+    ['Urgency',     'OPTIONAL',  'One of the valid urgencies below (inferred if blank).'],
+    ['Budget',      'OPTIONAL',  'Numeric only, no currency symbol (e.g. 150). Leave blank if unknown — do NOT guess.'],
+    ['Location',    'OPTIONAL',  'Unit, room, floor, or building area.'],
+    ['Due Date',    'OPTIONAL',  'YYYY-MM-DD (e.g. 2026-11-15). Year-only values become YYYY-12-31.'],
+    ['Notes',       'OPTIONAL',  'Any extra info: reference codes, tenant notes, etc.'],
+    [''],
+    ['Valid categories'],
+    ['Plumbing, Electrical, HVAC, Carpentry, Painting, Roofing, Flooring, Masonry,'],
+    ['Landscaping, General Repair, Demolition, Insulation, Drywall, Windows/Doors,'],
+    ['Appliances, Other'],
+    [''],
+    ['Valid urgencies'],
+    ['Low, Medium, High, Critical — e.g. "emergency" → Critical, "planned" → Low.'],
+  ];
+  const ws = XLSX.utils.aoa_to_sheet(aoa);
+  ws['!cols'] = [{ wch: 16 }, { wch: 14 }, { wch: 80 }];
+  return ws;
+};
+
 export const generateInspectionTemplate = (language = 'fr') => {
   if (language === 'fr') {
     // French Maintenance Plan Template - "Plan de maintien et Carnet d'entretien"
@@ -424,8 +568,9 @@ export const generateInspectionTemplate = (language = 'fr') => {
       { wch: 28 }, // Coût futur estimé après taxes
     ];
 
-    // Add worksheet to workbook
+    // Add worksheet to workbook + Guide sheet so the file is self-documenting
     XLSX.utils.book_append_sheet(workbook, worksheet, 'Plan de maintien');
+    XLSX.utils.book_append_sheet(workbook, buildInspectionGuideSheetFR(), 'Guide');
 
     // Generate buffer
     const buffer = XLSX.write(workbook, { type: 'buffer', bookType: 'xlsx' });
@@ -482,8 +627,9 @@ export const generateInspectionTemplate = (language = 'fr') => {
     { wch: 40 }, // Notes
   ];
 
-  // Add worksheet to workbook
+  // Add worksheet to workbook + Guide sheet so the file is self-documenting
   XLSX.utils.book_append_sheet(workbook, worksheet, 'Inspection Jobs');
+  XLSX.utils.book_append_sheet(workbook, buildInspectionGuideSheetEN(), 'Guide');
 
   // Generate buffer
   const buffer = XLSX.write(workbook, { type: 'buffer', bookType: 'xlsx' });
@@ -794,20 +940,37 @@ export const parseMaintenanceExcel = (fileBuffer) => {
           urgency = 'Low';
         }
 
-        // Parse budget - try multiple columns
-        let budget = parseBudget(mappedRow.budget);
-        if (!budget) {
-          // Check for any column with cost/budget in name
-          for (const [col, val] of Object.entries(row)) {
-            const colLower = col.toLowerCase();
-            if ((colLower.includes('cost') || colLower.includes('coût') || colLower.includes('budget') || colLower.includes('prix')) && val) {
-              const parsed = parseBudget(val);
-              if (parsed && parsed > budget) {
-                budget = parsed;
-              }
-            }
+        // Parse budget — collect EVERY numeric cost value in the row so we can
+        // derive both a low estimate (min) and a high estimate (max). The
+        // maintenance template has two cost columns per row ("Coût actuel
+        // estimé" + "Coût futur estimé après taxes") and both matter — the
+        // preview modal requires budget_min AND budget_max, so a single value
+        // gets duplicated across both.
+        const costValues = [];
+        for (const [col, val] of Object.entries(row)) {
+          const colLower = col.toLowerCase();
+          const looksLikeCost = colLower.includes('cost')
+            || colLower.includes('coût') || colLower.includes('cout')
+            || colLower.includes('budget')
+            || colLower.includes('prix')
+            || colLower.includes('montant')
+            || colLower.includes('estimé') || colLower.includes('estime');
+          if (looksLikeCost && val != null && val !== '') {
+            const parsed = parseBudget(val);
+            if (parsed && parsed > 0) costValues.push(parsed);
           }
         }
+        // Fallback: whatever the mapped "budget" column gave us, if we somehow
+        // missed it in the scan above.
+        const mapped = parseBudget(mappedRow.budget);
+        if (mapped && mapped > 0 && !costValues.includes(mapped)) costValues.push(mapped);
+
+        let budgetMin = null, budgetMax = null;
+        if (costValues.length > 0) {
+          budgetMin = Math.min(...costValues);
+          budgetMax = Math.max(...costValues);
+        }
+        const budget = budgetMax; // legacy single-value consumers
 
         // Parse due date - handle year-only values
         let dueDate = parseDate(mappedRow.dueDate);
@@ -819,13 +982,16 @@ export const parseMaintenanceExcel = (fileBuffer) => {
           }
         }
 
-        // Build job object
+        // Build job object. budget_min / budget_max are what the preview modal
+        // reads; `budget` stays for any legacy consumer.
         const job = {
           title: title.toString().trim().substring(0, 255), // Limit title length
           description: mappedRow.description ? mappedRow.description.toString().trim() : '',
           category: category,
           urgency: urgency,
           budget: budget,
+          budget_min: budgetMin,
+          budget_max: budgetMax,
           location: mappedRow.location ? mappedRow.location.toString().trim() : (mappedRow.component || null),
           dueDate: dueDate,
           notes: `Component: ${mappedRow.component || 'N/A'}\nUniformat Code: ${mappedRow.uniformatCode || 'N/A'}\nType of Work: ${mappedRow.typeOfWork || 'N/A'}`,

@@ -16,14 +16,31 @@ const SYSTEM_PROMPT = `You are a construction job data extractor. You receive ra
 
 Your task: extract construction/maintenance jobs from this data and return structured JSON.
 
+CRITICAL: Analyze EACH ROW INDEPENDENTLY. Never carry a category, urgency, or budget value from one row to the next. Two adjacent rows about different components must get different categories.
+
 RULES:
 1. Each row typically represents one job/task.
 2. For each job, extract these fields:
    - title (string, REQUIRED): The job title or work description. Max 255 chars. If no explicit title column exists, generate a concise title from component name + work type.
    - description (string): Detailed description of the work. Combine all relevant detail columns.
-   - category (string): Must be EXACTLY one of: Plumbing, Electrical, HVAC, Carpentry, Painting, Roofing, Flooring, Masonry, Landscaping, General Repair, Demolition, Insulation, Drywall, Windows/Doors, Appliances, Other. Infer from context (component names, uniformat codes, work descriptions).
-   - urgency (string): Must be EXACTLY one of: Low, Medium, High, Critical. Infer from priority/urgency fields or work type (e.g., "emergency"=Critical, "replacement"=High, "planned maintenance"=Low, "routine"=Medium).
-   - budget (number or null): The estimated cost/budget as a plain number. CRITICAL: Only extract if there is an explicit numeric cost/budget/price value in the row. NEVER guess or estimate a budget. If no budget column exists or the value is empty/zero, return null.
+   - category (string): Must be EXACTLY one of: Plumbing, Electrical, HVAC, Carpentry, Painting, Roofing, Flooring, Masonry, Landscaping, General Repair, Demolition, Insulation, Drywall, Windows/Doors, Appliances, Other. Infer INDEPENDENTLY for each row using the row's own title + description + component column. Multilingual keywords:
+       - Plomberie / plumbing / réseau d'eau / drainage / sanitaire / eau domestique → Plumbing
+       - Électrique / électricité / electrical / distribution électrique / entrée électrique → Electrical
+       - CVAC / HVAC / ventilation / climatisation / chauffage / thermostat → HVAC
+       - Toiture / roofing / membrane / couverture / tuile → Roofing
+       - Menuiserie / carpentry / bois → Carpentry
+       - Peinture / painting → Painting
+       - Revêtement de sol / plancher / flooring → Flooring
+       - Maçonnerie / masonry / brique / pierre / béton → Masonry
+       - Aménagement paysager / landscaping / jardin → Landscaping
+       - Démolition / demolition → Demolition
+       - Isolation / insulation → Insulation
+       - Cloison sèche / gypse / drywall → Drywall
+       - Portes / fenêtres / windows / doors → Windows/Doors
+       - Appareil / appliance / électroménager → Appliances
+   - urgency (string): Must be EXACTLY one of: Low, Medium, High, Critical. Infer PER ROW from priority/urgency fields or work type (e.g., "emergency"/"urgence"=Critical, "replacement"/"remplacement"=High, "planned maintenance"/"provision"=Low, "routine"/"entretien préventif"=Medium).
+   - budgetMin (number or null): The LOWER-bound cost estimate for this row. Look at EVERY numeric cost/budget/price column in the row (any language: "budget", "cost", "coût", "coùt", "prix", "amount", "montant", "estimé", "actuel"). If the row has MULTIPLE cost values, use the SMALLEST. If exactly one cost value, use it here and repeat it in budgetMax. If truly no numeric cost value in the row, return null.
+   - budgetMax (number or null): The UPPER-bound cost estimate for this row. From the same cost columns, use the LARGEST value (e.g., "coût futur estimé après taxes" > "coût actuel estimé"). If exactly one cost value, budgetMax equals budgetMin. If no cost values, return null.
    - location (string or null): Building area, unit, room, zone, floor.
    - dueDate (string or null): ISO 8601 date (YYYY-MM-DD). If only a year is given, use YYYY-12-31.
    - notes (string or null): Any additional info, component codes, references.
@@ -32,8 +49,9 @@ RULES:
 3. Skip rows that are clearly headers, subtotals, totals, section separators, or empty.
 4. If a row has no meaningful data for a job title, skip it.
 5. Currency symbols and formatting should be stripped from budget values — return only the numeric amount.
+6. Do NOT invent numbers. But if a numeric cost column exists in the row, always extract it — do not return null out of caution.
 
-6. If the spreadsheet data is clearly NOT related to construction, maintenance, inspection, or repair work (e.g., a grocery list, student grades, financial statements, personal data), return:
+7. If the spreadsheet data is clearly NOT related to construction, maintenance, inspection, or repair work (e.g., a grocery list, student grades, financial statements, personal data), return:
    {"jobs":[],"fieldMapping":{},"rejected":true,"rejectionReason":"Brief explanation of why this is not construction/job data"}
 
 Respond with ONLY a valid JSON object (no markdown, no explanation) in this exact format:
@@ -204,7 +222,29 @@ function validateJob(job, batchStartRow) {
     };
   }
 
-  const budgetValue = (typeof job.budget === 'number' && !isNaN(job.budget) && job.budget > 0) ? job.budget : null;
+  // Budget resolution — the prompt now asks for budgetMin + budgetMax explicitly,
+  // but we still accept the older single `budget` field as a fallback so we don't
+  // break if the AI ever slips back to the old shape. Order of preference:
+  //   1. Explicit budgetMin / budgetMax from AI (new prompt).
+  //   2. Single `budget` field — use it for both min and max.
+  //   3. null / null.
+  // Also swap min/max if the AI got them backwards so downstream validation
+  // (budget_min <= budget_max) always passes when values are present.
+  const asNum = (v) => (typeof v === 'number' && !isNaN(v) && v >= 0 ? v : null);
+  let budgetMin = asNum(job.budgetMin);
+  let budgetMax = asNum(job.budgetMax);
+  if (budgetMin === null && budgetMax === null) {
+    const single = asNum(job.budget);
+    // Only treat single budget as valid when it's > 0 — a zero-budget row
+    // reads as "no data" the same way null does.
+    if (single !== null && single > 0) {
+      budgetMin = single;
+      budgetMax = single;
+    }
+  }
+  if (budgetMin !== null && budgetMax !== null && budgetMin > budgetMax) {
+    [budgetMin, budgetMax] = [budgetMax, budgetMin];
+  }
 
   return {
     valid: true,
@@ -213,9 +253,11 @@ function validateJob(job, batchStartRow) {
       description: job.description || '',
       category: VALID_CATEGORIES.includes(job.category) ? job.category : 'Other',
       urgency: VALID_URGENCIES.includes(job.urgency) ? job.urgency : 'Medium',
-      budget: budgetValue,
-      budget_min: budgetValue,
-      budget_max: budgetValue,
+      // Keep `budget` (single) for anything downstream that still reads it,
+      // but the modal reads budget_min/budget_max — those are the authoritative pair.
+      budget: budgetMax ?? budgetMin,
+      budget_min: budgetMin,
+      budget_max: budgetMax,
       location: job.location || null,
       dueDate: job.dueDate || null,
       notes: job.notes || null,

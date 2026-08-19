@@ -30,6 +30,10 @@
 import pool from "../config/db.js";
 import { createNotification } from "./notificationController.js";
 import { getIO } from "../config/socketSetup.js";
+import {
+  buildResidentImportTemplate,
+  parseResidentImportBuffer,
+} from "../utils/importTemplates/residentImportTemplate.js";
 
 const normalizeEmail = (e) => (e ? String(e).trim().toLowerCase() : "");
 
@@ -396,6 +400,186 @@ export const acceptInvite = async (req, res) => {
     res.json({ ok: true, property_id: invite.property_id });
   } catch (err) {
     console.error("❌ acceptInvite (resident):", err);
+    res.status(500).json({ message: "Server error" });
+  }
+};
+
+// -----------------------------------------------------------------------------
+// PM: download the resident-import template as an .xlsx file.
+//
+// GET /api/properties/:propertyId/residents/import-template
+//
+// Ownership check first so a PM can't grab a template scoped to a property
+// they don't manage (the file itself isn't secret, but consistency matters —
+// if you can't manage the property, none of its resident endpoints work).
+// -----------------------------------------------------------------------------
+export const downloadImportTemplate = async (req, res) => {
+  try {
+    const { propertyId } = req.params;
+    const own = await assertPropertyOwner(req.user.id, propertyId);
+    if (!own.ok) return res.status(own.status).json({ message: own.message });
+
+    const buf = buildResidentImportTemplate();
+    const safeName = (own.propertyName || "property").replace(/[^a-zA-Z0-9-_]+/g, "_").slice(0, 40);
+    const filename = `intervos_residents_${safeName}_template.xlsx`;
+
+    res.setHeader("Content-Type", "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet");
+    res.setHeader("Content-Disposition", `attachment; filename="${filename}"`);
+    res.setHeader("Content-Length", buf.length);
+    res.status(200).end(buf);
+  } catch (err) {
+    console.error("❌ downloadImportTemplate:", err);
+    res.status(500).json({ message: "Server error" });
+  }
+};
+
+// -----------------------------------------------------------------------------
+// PM: bulk-import residents from an uploaded .xlsx.
+//
+// POST /api/properties/:propertyId/residents/bulk-import   (multipart, field "file")
+//
+// Every row that passes validation becomes an in-app invite via the same
+// path as the single-invite endpoint (link_existing kind, bell + socket
+// notification, no email). We return a per-row report so the UI can render
+// which rows landed and which need attention:
+//
+//   {
+//     summary: { total, created, skipped, errored },
+//     rows: [{ rowNumber, email, status, message }]
+//   }
+//
+// status values:
+//   "created"  — new invite created; the resident was notified in-app
+//   "skipped"  — already on this property, or already has a pending invite
+//   "errored"  — missing email, no matching account, on another property, etc.
+// -----------------------------------------------------------------------------
+export const bulkImportResidents = async (req, res) => {
+  try {
+    const { propertyId } = req.params;
+    const own = await assertPropertyOwner(req.user.id, propertyId);
+    if (!own.ok) return res.status(own.status).json({ message: own.message });
+
+    if (!req.file || !req.file.buffer) {
+      return res.status(400).json({ message: "No file uploaded. Attach the filled .xlsx template." });
+    }
+
+    const { rows, errors } = parseResidentImportBuffer(req.file.buffer);
+    if (errors.length) {
+      return res.status(400).json({ message: errors.map((e) => e.message).join(" "), errors });
+    }
+    if (rows.length === 0) {
+      return res.status(400).json({ message: "The file has no data rows to import." });
+    }
+
+    // PM's display name — cached once, reused for every notification.
+    const pmRow = await pool.query(
+      `SELECT first_name, last_name FROM public.users WHERE id = $1`,
+      [req.user.id]
+    );
+    const pmName = `${pmRow.rows[0]?.first_name || ""} ${pmRow.rows[0]?.last_name || ""}`.trim() || "A property manager";
+    const io = getIO();
+
+    const report = [];
+    let created = 0, skipped = 0, errored = 0;
+
+    // Process serially — bulk imports are small (<200 rows in practice) and
+    // serial keeps the per-row error messages ordered and the notification
+    // fan-out predictable. If this ever needs to scale, batch in chunks.
+    for (const r of rows) {
+      const rec = { rowNumber: r.rowNumber, email: r.email };
+
+      if (!r.email) {
+        errored++;
+        report.push({ ...rec, status: "errored", message: "Email is required." });
+        continue;
+      }
+
+      // Look the resident up by email. Must be an existing resident account.
+      const found = await pool.query(
+        `SELECT u.id, u.first_name, u.last_name, u.email, rp.property_id
+           FROM public.users u
+           LEFT JOIN public.resident_profiles rp ON rp.user_id = u.id
+          WHERE LOWER(u.email) = $1 AND u.role = 'resident'
+          LIMIT 1`,
+        [r.email]
+      );
+      if (found.rows.length === 0) {
+        errored++;
+        report.push({ ...rec, status: "errored", message: "No resident account with this email." });
+        continue;
+      }
+      const resident = found.rows[0];
+
+      if (resident.property_id === propertyId) {
+        skipped++;
+        report.push({ ...rec, status: "skipped", message: "Already on this property." });
+        continue;
+      }
+      if (resident.property_id) {
+        errored++;
+        report.push({ ...rec, status: "errored", message: "Currently linked to another property — they'll need to leave it first." });
+        continue;
+      }
+
+      // Attempt the insert. UNIQUE (property_id, LOWER(invited_email)) means
+      // a pre-existing pending invite becomes a 23505 — treat as "skipped".
+      let invite;
+      try {
+        const ins = await pool.query(
+          `INSERT INTO public.property_resident_invites
+             (property_id, pm_user_id, invited_email, invited_unit_number,
+              kind, resolved_resident_user_id, message)
+           VALUES ($1, $2, $3, $4, 'link_existing', $5, $6)
+           RETURNING *`,
+          [propertyId, req.user.id, r.email, r.unit_number, resident.id, r.message]
+        );
+        invite = ins.rows[0];
+      } catch (err) {
+        if (err.code === "23505") {
+          skipped++;
+          report.push({ ...rec, status: "skipped", message: "Already has a pending invite to this property." });
+          continue;
+        }
+        errored++;
+        report.push({ ...rec, status: "errored", message: "Database error — try again." });
+        console.error(`❌ bulkImportResidents row ${r.rowNumber}:`, err);
+        continue;
+      }
+
+      // Notify the resident — bell + socket. Same shape as inviteResident().
+      const content = `${pmName} invited you to join ${own.propertyName || "their property"}${r.unit_number ? `, unit ${r.unit_number}` : ""}.`;
+      if (io) {
+        io.to(resident.id.toString()).emit("resident_invite", {
+          inviteId: invite.id,
+          propertyId,
+          propertyName: own.propertyName,
+          unitNumber: r.unit_number,
+          senderId: req.user.id,
+          senderName: pmName,
+          content,
+        });
+      }
+      createNotification({
+        userId: resident.id,
+        type: "resident_invite",
+        senderId: req.user.id,
+        senderName: pmName,
+        content,
+        propertyName: own.propertyName,
+      }).catch((err) =>
+        console.error(`⚠️ bulk invite notification failed for ${r.email}:`, err.message)
+      );
+
+      created++;
+      report.push({ ...rec, status: "created", message: "Invite sent." });
+    }
+
+    res.status(200).json({
+      summary: { total: rows.length, created, skipped, errored },
+      rows: report,
+    });
+  } catch (err) {
+    console.error("❌ bulkImportResidents:", err);
     res.status(500).json({ message: "Server error" });
   }
 };
